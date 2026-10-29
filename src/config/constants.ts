@@ -11,7 +11,8 @@ export const GAME_HEIGHT = 224;
 
 // ── Faixa de movimento 2.5D (eixo Y do chão) ──────────────
 // O jogador só pode andar dentro desta faixa vertical.
-export const WALK_ZONE_TOP = 130;
+// Ajustado para garantir que os pés (origin Y=1) não saiam da tela.
+export const WALK_ZONE_TOP = 140;
 export const WALK_ZONE_BOTTOM = 210;
 
 // ── Mundo (largura total do cenário) ───────────────────────
@@ -22,10 +23,27 @@ export const WORLD_HEIGHT = GAME_HEIGHT;
 export const PLAYER_SPEED = 120;       // pixels/seg
 export const PLAYER_JUMP_FORCE = 220;  // velocidade inicial do pulo (eixo Z)
 export const PLAYER_GRAVITY = 600;     // gravidade do eixo Z
-export const PLAYER_DRAG = 800;        // drag para sensação de peso ao parar
+export const PLAYER_DRAG = 0;          // drag zero (controlado manualmente)
 export const PLAYER_HP_MAX = 100;
 export const PLAYER_STAMINA_MAX = 100;
 export const PLAYER_LIVES = 3;
+
+// ── Combate ────────────────────────────────────────────────
+export const STAMINA_REGEN_RATE = 15;  // stamina recuperada por segundo
+export const COMBO_WINDOW = 300;       // janela para encadear combo (ms)
+export const INPUT_BUFFER = 120;       // buffer de input para ataque (ms)
+export const HITSTOP_FRAMES = 3;       // frames de hitstop ao acertar
+export const SCREEN_SHAKE_INTENSITY = 3; // intensidade do shake
+export const SCREEN_SHAKE_DURATION = 100; // duração do shake (ms)
+export const KNOCKBACK_FORCE = 150;    // força do knockback
+export const KNOCKDOWN_DURATION = 700; // duração do knockdown (ms)
+export const HURT_STUN_DURATION = 250; // duração do stun ao levar dano (ms)
+export const INVULNERABILITY_DURATION = 1200; // i-frames após dano (ms)
+export const LANE_TOLERANCE = 15;      // tolerância de faixa para hit (pixels)
+
+// ── Inimigo ────────────────────────────────────────────────
+export const ENEMY_HP_MAX = 40;
+export const ENEMY_SCORE_VALUE = 100;  // pontos ao derrotar
 
 // ── Profundidade / Ordenação ───────────────────────────────
 // depth = Y do chão do sprite, garantindo que objetos mais
@@ -54,5 +72,9 @@ export const EVENTS = {
   SCORE_CHANGED: 'score:changed',
   PLAYER_DAMAGED: 'player:damaged',
   PLAYER_DIED: 'player:died',
+  PLAYER_RESPAWNED: 'player:respawned',
   GAME_OVER: 'game:over',
+  ENEMY_DAMAGED: 'enemy:damaged',
+  ENEMY_DIED: 'enemy:died',
+  COMBO_CHANGED: 'combo:changed',
 } as const;

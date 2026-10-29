@@ -1,58 +1,38 @@
 /**
  * Player.ts
  * ─────────────────────────────────────────────────────────
- * Entidade do jogador. Estende Phaser.Physics.Arcade.Sprite.
+ * Entidade do jogador. Herda de Fighter.
  *
  * Responsabilidades:
  * - Controle de movimento 2.5D (WASD/setas)
- * - Eixo Z manual para pulo (posição visual vs. posição física)
- * - Sombra projetada no chão
- * - Máquina de estados simples (idle, run, jump)
- * - Ordenação de profundidade (depth = Y do chão)
- * - Hitbox ajustada (pequena nos pés) para o 2.5D funcionar
+ * - Sistema de combate (ataques, combos, hitboxes)
+ * - Delega HP/vidas/score para PlayerState
+ * - Gerencia i-frames e respawn
  *
  * NÃO contém lógica de HP/dano → delega para PlayerState.
  */
 
 import Phaser from 'phaser';
+import { Fighter, FighterState } from './Fighter';
 import { PlayerState } from '../state/PlayerState';
-import { playAnimation, AnimationName } from '../systems/AnimationManager';
+import { AttackData, PLAYER_ATTACKS, PLAYER_AIR_ATTACK } from '../config/attacks';
 import {
   PLAYER_SPEED,
   PLAYER_JUMP_FORCE,
-  PLAYER_GRAVITY,
-  PLAYER_DRAG,
   WALK_ZONE_TOP,
   WALK_ZONE_BOTTOM,
-  WORLD_WIDTH,
+  STAMINA_REGEN_RATE,
+  COMBO_WINDOW,
+  INPUT_BUFFER,
+  KNOCKDOWN_DURATION,
+  HURT_STUN_DURATION,
+  INVULNERABILITY_DURATION,
+  EVENTS,
 } from '../config/constants';
 
-/**
- * Estados possíveis do jogador (máquina de estados simples).
- * Preparada para receber 'attack', 'dash', 'hurt', 'fall' na Fase 2.
- */
-export enum PlayerAnimState {
-  Idle = 'idle',
-  Run = 'run',
-  Jump = 'jump',
-}
-
-export class Player extends Phaser.Physics.Arcade.Sprite {
-  // ── Estado ─────────────────────────────────────────────
+export class Player extends Fighter {
+  // ── Estado do jogador (HP, vidas, score) ───────────────
   private _playerState: PlayerState;
-  private _animState: PlayerAnimState = PlayerAnimState.Idle;
-  private _facingRight: boolean = true;
-
-  // ── Eixo Z (pulo manual) ──────────────────────────────
-  private _jumpHeight: number = 0;        // altura atual (0 = no chão)
-  private _jumpVelocity: number = 0;      // velocidade vertical do pulo
-  private _isGrounded: boolean = true;
-
-  // ── Posição base do chão (antes do offset visual) ──────
-  private _groundY: number;
-
-  // ── Sombra ─────────────────────────────────────────────
-  private _shadow: Phaser.GameObjects.Image;
 
   // ── Controles ──────────────────────────────────────────
   private _cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
@@ -63,7 +43,22 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     D: Phaser.Input.Keyboard.Key;
   };
   private _jumpKey!: Phaser.Input.Keyboard.Key;
+  private _attackKey!: Phaser.Input.Keyboard.Key;
   private _debugKey!: Phaser.Input.Keyboard.Key;
+
+  // ── Combate ────────────────────────────────────────────
+  private _hitboxZone!: Phaser.GameObjects.Zone;
+  private _hitboxBody!: Phaser.Physics.Arcade.Body;
+  private _currentAttack?: AttackData;
+  private _attackStartTime: number = 0;
+  private _comboIndex: number = 0;
+  private _lastAttackEndTime: number = 0;
+  private _attackBufferTime: number = 0;
+  private _hitTargets: Set<Fighter> = new Set();
+
+  // ── Timers de estado ───────────────────────────────────
+  private _stateTimer: number = 0;
+  private _stateEndTime: number = 0;
 
   constructor(
     scene: Phaser.Scene,
@@ -71,34 +66,19 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     y: number,
     playerState: PlayerState
   ) {
-    super(scene, x, y, 'player_idle');
+    super(scene, x, y, 'player_idle', playerState.hpMax);
 
     this._playerState = playerState;
-    this._groundY = y;
 
-    // ── Adiciona ao cenário e à física ───────────────────
-    scene.add.existing(this);
-    scene.physics.add.existing(this);
-
-    // ── Hitbox ajustada (pequena, nos pés) ───────────────
-    const body = this.body as Phaser.Physics.Arcade.Body;
-    body.setSize(10, 6);              // hitbox pequena nos pés
-    body.setOffset(5, 26);            // posicionada na base do sprite
-    body.setCollideWorldBounds(false); // usamos clamp manual
-
-    // ── Drag para sensação de peso ───────────────────────
-    body.setDrag(PLAYER_DRAG, PLAYER_DRAG);
-    body.setMaxVelocity(PLAYER_SPEED, PLAYER_SPEED);
-
-    // ── Sombra (fica no chão, independente do jumpHeight) ─
-    this._shadow = scene.add.image(x, y + 2, 'shadow');
-    this._shadow.setDepth(0);
+    // ── Cria a hitbox de ataque (zone) ───────────────────
+    this._hitboxZone = scene.add.zone(0, 0, 1, 1);
+    scene.physics.add.existing(this._hitboxZone);
+    this._hitboxBody = this._hitboxZone.body as Phaser.Physics.Arcade.Body;
+    this._hitboxBody.enable = false; // desabilitada por padrão
+    this._hitboxBody.setAllowGravity(false);
 
     // ── Controles ────────────────────────────────────────
     this._setupControls();
-
-    // ── Profundidade inicial ─────────────────────────────
-    this.setDepth(y);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -116,6 +96,7 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
       D: Phaser.Input.Keyboard.Key;
     };
     this._jumpKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this._attackKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.J);
     this._debugKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.H);
   }
 
@@ -123,42 +104,72 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // UPDATE (chamado todo frame pela GameScene)
   // ═══════════════════════════════════════════════════════
 
-  update(_time: number, _delta: number): void {
-    if (!this._playerState.isAlive) return;
+  update(_time: number, delta: number): void {
+    // Se morto, não faz nada
+    if (this._fighterState === FighterState.Dead) return;
 
-    // Antes de processar, restaura a posição do chão
-    // (porque no frame anterior o postupdate pode ter deslocado o sprite)
-    this.y = this._groundY;
+    // Atualiza eixo Z
+    this._updateJumpAxis(delta);
 
-    this._handleMovement();
-    this._handleJump();
-    this._updateJumpAxis();
-    this._updateAnimation();
+    // Atualiza timers de estado
+    this._updateStateTimers();
+
+    // Processa input baseado no estado
+    this._processInput(delta);
+
+    // Atualiza profundidade
     this._updateDepth();
+
+    // Regenera stamina
+    this._playerState.recoverStamina(STAMINA_REGEN_RATE * (delta / 1000));
+
+    // Debug
     this._handleDebugInput();
   }
 
   /**
-   * Chamado no postupdate da GameScene (após a física sincronizar).
-   * Faz o clamp da posição, salva o groundY e aplica o offset visual.
+   * Chamado no postupdate da GameScene.
    */
   postPhysicsUpdate(): void {
-    this._clampToWalkZone();
-    this._saveGroundY();
+    this.clampToWalkZone();
     this.applyJumpVisualOffset();
+    this._updateHitboxPosition();
   }
 
   // ═══════════════════════════════════════════════════════
-  // MOVIMENTO 2.5D
+  // INPUT
   // ═══════════════════════════════════════════════════════
+
+  private _processInput(delta: number): void {
+    // Buffer de input para ataque
+    if (Phaser.Input.Keyboard.JustDown(this._attackKey)) {
+      this._attackBufferTime = this.scene.time.now + INPUT_BUFFER;
+    }
+
+    // Estados que bloqueiam input
+    if (this._fighterState === FighterState.Hurt || 
+        this._fighterState === FighterState.Knockdown ||
+        this._fighterState === FighterState.Attack) {
+      return;
+    }
+
+    // Movimento
+    this._handleMovement();
+
+    // Pulo
+    this._handleJump();
+
+    // Ataque
+    this._handleAttack();
+  }
 
   private _handleMovement(): void {
     const body = this.body as Phaser.Physics.Arcade.Body;
 
-    // Não permite input de movimento no ar (mantém inércia)
+    // Não permite mover no ar (mantém momentum)
     if (!this._isGrounded) return;
 
-    // ── Lê input (WASD + setas) ─────────────────────────
+    // Lê input
     let vx = 0;
     let vy = 0;
 
@@ -167,153 +178,256 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
     if (this._cursors.up?.isDown || this._wasd.W.isDown) vy -= 1;
     if (this._cursors.down?.isDown || this._wasd.S.isDown) vy += 1;
 
-    // ── Normaliza diagonal ──────────────────────────────
+    // Normaliza diagonal
     if (vx !== 0 && vy !== 0) {
       const norm = 1 / Math.SQRT2;
       vx *= norm;
       vy *= norm;
     }
 
-    // ── Aplica velocidade ───────────────────────────────
+    // Aplica velocidade
     body.setVelocity(vx * PLAYER_SPEED, vy * PLAYER_SPEED);
 
-    // ── Flip do sprite (facing) ─────────────────────────
+    // Facing
     if (vx > 0) {
-      this._facingRight = true;
-      this.setFlipX(false);
+      this.setFacing(true);
     } else if (vx < 0) {
-      this._facingRight = false;
-      this.setFlipX(true);
+      this.setFacing(false);
+    }
+
+    // Estado
+    const isMoving = Math.abs(vx) > 0.1 || Math.abs(vy) > 0.1;
+    if (isMoving && this._fighterState !== FighterState.Walk) {
+      this.changeState(FighterState.Walk);
+    } else if (!isMoving && this._fighterState === FighterState.Walk) {
+      this.changeState(FighterState.Idle);
     }
   }
-
-  // ═══════════════════════════════════════════════════════
-  // PULO (eixo Z manual)
-  // ═══════════════════════════════════════════════════════
 
   private _handleJump(): void {
     if (!this._isGrounded) return;
 
     if (Phaser.Input.Keyboard.JustDown(this._jumpKey)) {
-      this._jumpVelocity = PLAYER_JUMP_FORCE;
-      this._isGrounded = false;
+      this.jump(PLAYER_JUMP_FORCE);
     }
   }
 
-  /**
-   * Atualiza o eixo Z (altura do pulo).
-   * Usa física manual: velocidade - gravidade * dt.
-   */
-  private _updateJumpAxis(): void {
-    if (this._isGrounded) {
-      this._jumpHeight = 0;
-      this._jumpVelocity = 0;
+  // ═══════════════════════════════════════════════════════
+  // COMBATE
+  // ═══════════════════════════════════════════════════════
+
+  private _handleAttack(): void {
+    const now = this.scene.time.now;
+
+    // Verifica buffer de input
+    if (now > this._attackBufferTime) return;
+
+    // Verifica se pode atacar
+    if (this._fighterState === FighterState.Attack) {
+      // Verifica se está na janela de combo
+      const totalTime = this._currentAttack!.startup + this._currentAttack!.active + this._currentAttack!.recovery;
+      const elapsed = now - this._attackStartTime;
+      if (elapsed < totalTime && elapsed > totalTime - COMBO_WINDOW) {
+        // Pode encadear próximo golpe
+        this._startAttack();
+      }
       return;
     }
 
-    // Delta time em segundos (limitado para evitar saltos grandes)
-    const rawDt = this.scene.game.loop.delta / 1000;
-    const dt = Math.min(rawDt, 0.05); // limita a 50ms (20fps mínimo)
-
-    // Aplica gravidade ao eixo Z
-    this._jumpVelocity -= PLAYER_GRAVITY * dt;
-    this._jumpHeight += this._jumpVelocity * dt;
-
-    // Tocou o chão
-    if (this._jumpHeight <= 0) {
-      this._jumpHeight = 0;
-      this._jumpVelocity = 0;
-      this._isGrounded = true;
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // LIMITES E POSIÇÃO
-  // ═══════════════════════════════════════════════════════
-
-  /**
-   * Restringe o jogador à faixa de Y permitida e aos limites do mundo.
-   */
-  private _clampToWalkZone(): void {
-    const body = this.body as Phaser.Physics.Arcade.Body;
-    if (!body) return;
-
-    // Limite superior da faixa
-    if (this.y < WALK_ZONE_TOP) {
-      this.y = WALK_ZONE_TOP;
-      body.setVelocityY(0);
-    }
-    // Limite inferior da faixa
-    if (this.y > WALK_ZONE_BOTTOM) {
-      this.y = WALK_ZONE_BOTTOM;
-      body.setVelocityY(0);
-    }
-
-    // Limites horizontais do mundo
-    if (this.x < 16) {
-      this.x = 16;
-      body.setVelocityX(0);
-    }
-    if (this.x > WORLD_WIDTH - 16) {
-      this.x = WORLD_WIDTH - 16;
-      body.setVelocityX(0);
-    }
-  }
-
-  /**
-   * Salva a posição Y do chão (após clamp, antes do offset visual).
-   */
-  private _saveGroundY(): void {
-    this._groundY = this.y;
-  }
-
-  /**
-   * Aplica o offset visual do pulo.
-   * Chamado no postupdate da GameScene (após a física sincronizar).
-   */
-  applyJumpVisualOffset(): void {
-    if (this._jumpHeight > 0) {
-      this.y = this._groundY - this._jumpHeight;
-    }
-    // Atualiza a sombra
-    this._shadow.setPosition(this.x, this._groundY + 2);
-    const shadowScale = Math.max(0.3, 1 - (this._jumpHeight / 80));
-    this._shadow.setScale(shadowScale);
-    this._shadow.setAlpha(0.4 * shadowScale);
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // ANIMAÇÃO
-  // ═══════════════════════════════════════════════════════
-
-  private _updateAnimation(): void {
-    let newState: PlayerAnimState;
-
-    if (!this._isGrounded) {
-      newState = PlayerAnimState.Jump;
+    // Verifica janela de combo
+    if (now - this._lastAttackEndTime < COMBO_WINDOW) {
+      this._comboIndex = Math.min(this._comboIndex + 1, PLAYER_ATTACKS.length - 1);
     } else {
+      this._comboIndex = 0;
+    }
+
+    this._startAttack();
+  }
+
+  private _startAttack(): void {
+    const now = this.scene.time.now;
+    this._attackBufferTime = 0;
+
+    // Escolhe o ataque
+    let attackData: AttackData;
+    if (!this._isGrounded) {
+      attackData = PLAYER_AIR_ATTACK;
+    } else {
+      attackData = PLAYER_ATTACKS[this._comboIndex];
+    }
+
+    this._currentAttack = attackData;
+    this._attackStartTime = now;
+    this._hitTargets.clear();
+
+    // Muda estado
+    this.changeState(FighterState.Attack);
+
+    // Agenda ativação da hitbox
+    this.scene.time.delayedCall(attackData.startup, () => {
+      this._activateHitbox();
+    });
+
+    // Agenda desativação da hitbox
+    this.scene.time.delayedCall(attackData.startup + attackData.active, () => {
+      this._deactivateHitbox();
+    });
+
+    // Agenda fim do ataque
+    const totalTime = attackData.startup + attackData.active + attackData.recovery;
+    this.scene.time.delayedCall(totalTime, () => {
+      this._endAttack();
+    });
+  }
+
+  private _activateHitbox(): void {
+    if (!this._currentAttack) return;
+    this._hitboxBody.enable = true;
+    this._hitboxBody.setSize(this._currentAttack.hitboxWidth, this._currentAttack.hitboxHeight);
+  }
+
+  private _deactivateHitbox(): void {
+    this._hitboxBody.enable = false;
+  }
+
+  private _endAttack(): void {
+    this._currentAttack = undefined;
+    this._lastAttackEndTime = this.scene.time.now;
+    this._deactivateHitbox();
+
+    // Volta ao estado idle ou walk
+    if (this._isGrounded) {
       const body = this.body as Phaser.Physics.Arcade.Body;
       const isMoving = Math.abs(body.velocity.x) > 10 || Math.abs(body.velocity.y) > 10;
-      newState = isMoving ? PlayerAnimState.Run : PlayerAnimState.Idle;
-    }
-
-    if (newState !== this._animState) {
-      this._animState = newState;
-      playAnimation(this, newState as AnimationName);
+      this.changeState(isMoving ? FighterState.Walk : FighterState.Idle);
+    } else {
+      this.changeState(FighterState.Jump);
     }
   }
 
+  private _updateHitboxPosition(): void {
+    if (!this._hitboxBody.enable || !this._currentAttack) return;
+
+    // Posiciona a hitbox na frente do jogador
+    const offsetX = this._facingRight ? 15 : -15;
+    this._hitboxZone.setPosition(this.x + offsetX, this.y - 10);
+  }
+
+  /**
+   * Verifica se um alvo pode ser atingido por este ataque.
+   */
+  canHitTarget(target: Fighter): boolean {
+    if (!this._currentAttack) return false;
+    if (this._hitTargets.has(target)) return false;
+    if (target.fighterState === FighterState.Dead || target.fighterState === FighterState.Knockdown) return false;
+    if (target.isInvulnerable()) return false;
+
+    // Valida profundidade
+    const laneDiff = Math.abs(this.y - target.y);
+    const zDiff = Math.abs(this._jumpHeight - target.jumpHeight);
+    if (laneDiff > 15 || zDiff > this._currentAttack.zTolerance) return false;
+
+    return true;
+  }
+
+  /**
+   * Registra que um alvo foi atingido (para não acertar duas vezes).
+   */
+  registerHit(target: Fighter): void {
+    this._hitTargets.add(target);
+  }
+
+  /**
+   * Retorna o ataque atual (para a GameScene processar o dano).
+   */
+  getCurrentAttack(): AttackData | undefined {
+    return this._currentAttack;
+  }
+
+  /**
+   * Retorna a hitbox (para overlap na GameScene).
+   */
+  getHitboxZone(): Phaser.GameObjects.Zone {
+    return this._hitboxZone;
+  }
+
   // ═══════════════════════════════════════════════════════
-  // PROFUNDIDADE
+  // DANO E RESPAWN
   // ═══════════════════════════════════════════════════════
 
   /**
-   * Ordenação por profundidade: depth = Y do chão.
-   * Objetos com Y maior (mais perto da câmera) ficam na frente.
+   * Aplica dano ao jogador (delega para PlayerState).
    */
-  private _updateDepth(): void {
-    this.setDepth(this._groundY);
-    this._shadow.setDepth(this._groundY - 0.1);
+  takePlayerDamage(amount: number, knockbackX: number = 0, knockdown: boolean = false): boolean {
+    if (this.isInvulnerable()) return false;
+    if (this._fighterState === FighterState.Dead) return false;
+
+    // Aplica dano no PlayerState
+    const died = this._playerState.takeDamage(amount);
+
+    if (died) {
+      this._handleDeath();
+    } else {
+      // Aplica estado de hurt/knockdown
+      if (knockdown) {
+        this.changeState(FighterState.Knockdown);
+        this._stateEndTime = this.scene.time.now + KNOCKDOWN_DURATION;
+      } else {
+        this.changeState(FighterState.Hurt);
+        this._stateEndTime = this.scene.time.now + HURT_STUN_DURATION;
+      }
+
+      // Knockback
+      if (knockbackX !== 0) {
+        const body = this.body as Phaser.Physics.Arcade.Body;
+        body.setVelocityX(knockbackX);
+      }
+
+      // Invulnerabilidade
+      this.grantInvulnerability(INVULNERABILITY_DURATION);
+    }
+
+    return died;
+  }
+
+  private _handleDeath(): void {
+    this.changeState(FighterState.Dead);
+    this._stopBlink();
+
+    // PLAYER_DIED já foi emitido pelo PlayerState._handleDeath()
+    // Apenas agenda o respawn se ainda há vidas
+    this.scene.time.delayedCall(1000, () => {
+      if (this._playerState.lives > 0) {
+        this._respawn();
+      }
+    });
+  }
+
+  private _respawn(): void {
+    this._playerState.respawn();
+    this._hp = this._hpMax;
+    this.changeState(FighterState.Idle);
+    this.grantInvulnerability(INVULNERABILITY_DURATION);
+
+    // Emite evento
+    this.scene.game.events.emit(EVENTS.PLAYER_RESPAWNED);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // TIMERS DE ESTADO
+  // ═══════════════════════════════════════════════════════
+
+  private _updateStateTimers(): void {
+    const now = this.scene.time.now;
+
+    // Hurt/Knockdown
+    if ((this._fighterState === FighterState.Hurt || this._fighterState === FighterState.Knockdown) && now >= this._stateEndTime) {
+      if (this._isGrounded) {
+        this.changeState(FighterState.Idle);
+      } else {
+        this.changeState(FighterState.Jump);
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════
@@ -321,9 +435,8 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // ═══════════════════════════════════════════════════════
 
   private _handleDebugInput(): void {
-    // Tecla H: reduz HP para testar a HUD
     if (Phaser.Input.Keyboard.JustDown(this._debugKey)) {
-      this._playerState.takeDamage(15);
+      this.takePlayerDamage(15);
     }
   }
 
@@ -331,10 +444,5 @@ export class Player extends Phaser.Physics.Arcade.Sprite {
   // GETTERS
   // ═══════════════════════════════════════════════════════
 
-  get isGrounded(): boolean { return this._isGrounded; }
-  get jumpHeight(): number { return this._jumpHeight; }
-  get groundY(): number { return this._groundY; }
-  get facingRight(): boolean { return this._facingRight; }
-  get animState(): PlayerAnimState { return this._animState; }
   get playerState(): PlayerState { return this._playerState; }
 }

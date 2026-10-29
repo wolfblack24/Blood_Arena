@@ -3,18 +3,18 @@
  * ─────────────────────────────────────────────────────────
  * Cena principal do jogo. Responsável por:
  * - Criar o cenário (parallax em 2 camadas)
- * - Instanciar o jogador (Player)
+ * - Instanciar o jogador (Player) e inimigos (Enemy)
  * - Configurar a câmera (follow horizontal, Y fixo)
  * - Definir os limites do mundo
  * - Lançar a UIScene em paralelo
- * - Gerenciar o loop de jogo (update)
- *
- * Comunicação com UIScene: somente via eventos (game.events)
- * e PlayerState. Nunca por referência direta.
+ * - Gerenciar combate (hitstop, screen shake, detecção de dano)
+ * - Debug (F1 para hitboxes, teclas para toggles)
  */
 
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
+import { Enemy } from '../entities/Enemy';
+import { Fighter, FighterState } from '../entities/Fighter';
 import { PlayerState } from '../state/PlayerState';
 import {
   GAME_WIDTH,
@@ -26,20 +26,39 @@ import {
   CAMERA_LERP,
   COLOR_SKY_TOP,
   COLOR_SKY_BOTTOM,
-  COLOR_BG_FAR,
-  COLOR_BG_NEAR,
-  COLOR_GROUND,
+  HITSTOP_FRAMES,
+  SCREEN_SHAKE_INTENSITY,
+  SCREEN_SHAKE_DURATION,
+  LANE_TOLERANCE,
+  EVENTS,
 } from '../config/constants';
 
 export class GameScene extends Phaser.Scene {
   // ── Entidades ──────────────────────────────────────────
   private _player!: Player;
   private _playerState!: PlayerState;
+  private _enemies: Enemy[] = [];
+  private _enemyGroup!: Phaser.Physics.Arcade.Group;
 
-  // ── Parallax (camadas de fundo) ────────────────────────
+  // ── Parallax ───────────────────────────────────────────
   private _bgFar!: Phaser.GameObjects.TileSprite;
   private _bgNear!: Phaser.GameObjects.TileSprite;
-  private _ground!: Phaser.GameObjects.TileSprite;
+
+  // ── Hitstop ────────────────────────────────────────────
+  private _hitstopFrames: number = 0;
+
+  // ── Debug ──────────────────────────────────────────────
+  private _debugMode: boolean = false;
+  private _debugGraphics!: Phaser.GameObjects.Graphics;
+  private _debugHitboxes: Phaser.GameObjects.Rectangle[] = [];
+
+  // ── Combo ──────────────────────────────────────────────
+  private _comboCount: number = 0;
+  private _comboTimer: number = 0;
+
+  // ── Teclas de debug ────────────────────────────────────
+  private _f1Key!: Phaser.Input.Keyboard.Key;
+  private _gKey!: Phaser.Input.Keyboard.Key;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -52,7 +71,7 @@ export class GameScene extends Phaser.Scene {
     // ── Define limites do mundo ──────────────────────────
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
-    // ── Cria o cenário (parallax + chão) ─────────────────
+    // ── Cria o cenário ───────────────────────────────────
     this._createBackground();
 
     // ── Cria o jogador ───────────────────────────────────
@@ -60,163 +79,211 @@ export class GameScene extends Phaser.Scene {
     const startY = (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2;
     this._player = new Player(this, startX, startY, this._playerState);
 
+    // ── Cria inimigos ────────────────────────────────────
+    this._enemyGroup = this.physics.add.group({ classType: Enemy, runChildUpdate: true });
+    this._spawnEnemies();
+
+    // ── Configura overlaps de combate ────────────────────
+    this._setupCombatOverlaps();
+
     // ── Configura a câmera ───────────────────────────────
     this._setupCamera();
 
-    // ── Marca indicadores visuais da zona de walk ────────
+    // ── Indicadores visuais ──────────────────────────────
     this._createZoneIndicators();
 
-    // ── Lança a UIScene em paralelo ──────────────────────
-    // A UIScene roda sobre a GameScene, recebendo dados por eventos.
+    // ── Debug graphics ───────────────────────────────────
+    this._debugGraphics = this.add.graphics();
+    this._debugGraphics.setDepth(9999);
+
+    // ── Lança a UIScene ──────────────────────────────────
     if (!this.scene.isActive('UIScene')) {
       this.scene.launch('UIScene', { playerState: this._playerState });
     }
 
-    // ── Postupdate: clamp + offset visual do pulo ────────
-    // Após a física sincronizar sprite ↔ corpo:
-    // 1. Restringe à faixa de walk (clamp)
-    // 2. Salva a posição do chão (groundY)
-    // 3. Aplica offset visual do pulo (sprite sobe pelo jumpHeight)
-    this.events.on('postupdate', () => {
-      this._player.postPhysicsUpdate();
-    });
+    // ── Teclas de debug ──────────────────────────────────
+    if (this.input.keyboard) {
+      this._f1Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F1);
+      this._gKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G);
+    }
 
-    // ── Comentários para futuro tilemap ──────────────────
-    // Para adicionar um tilemap com obstáculos:
-    // const map = this.add.tilemap({ key: 'level1' });
-    // const tileset = map.addTilesetImage('tiles', 'tileset_img');
-    // const walls = map.createLayer('walls', tileset);
-    // walls.setCollisionByProperty({ collides: true });
-    // this.physics.add.collider(this._player, walls);
+    // ── Eventos ──────────────────────────────────────────
+    this.game.events.on(EVENTS.ENEMY_DIED, this._onEnemyDied, this);
+    this.events.on('postupdate', this._onPostUpdate, this);
+    this.events.on('shutdown', this._onShutdown, this);
   }
 
   // ═══════════════════════════════════════════════════════
-  // CENÁRIO (parallax)
+  // INIMIGOS
+  // ═══════════════════════════════════════════════════════
+
+  private _spawnEnemies(): void {
+    const positions = [
+      { x: 300, y: 160 },
+      { x: 500, y: 180 },
+      { x: 700, y: 150 },
+    ];
+
+    for (const pos of positions) {
+      const enemy = new Enemy(this, pos.x, pos.y, this._playerState);
+      this._enemies.push(enemy);
+      this._enemyGroup.add(enemy);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // COMBATE
+  // ═══════════════════════════════════════════════════════
+
+  private _setupCombatOverlaps(): void {
+    // Hitbox do jogador vs inimigos
+    this.physics.add.overlap(
+      this._player.getHitboxZone(),
+      this._enemyGroup,
+      this._onPlayerHitEnemy as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
+      undefined,
+      this
+    );
+
+    // Hitbox dos inimigos vs jogador
+    for (const enemy of this._enemies) {
+      this.physics.add.overlap(
+        enemy.getHitboxZone(),
+        this._player,
+        this._onEnemyHitPlayer as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
+        undefined,
+        this
+      );
+    }
+  }
+
+  private _onPlayerHitEnemy(playerHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
+    const enemy = enemyObj as Enemy;
+    const attack = this._player.getCurrentAttack();
+    if (!attack) return;
+
+    // Valida se pode atingir
+    if (!this._player.canHitTarget(enemy)) return;
+
+    // Registra hit
+    this._player.registerHit(enemy);
+
+    // Calcula knockback
+    const knockbackDir = this._player.facingRight ? 1 : -1;
+    const knockbackX = knockbackDir * attack.knockback;
+
+    // Aplica dano
+    const died = enemy.takeEnemyDamage(attack.damage, knockbackX, attack.knockdown);
+
+    // Hitstop
+    this._hitstopFrames = attack.hitstop;
+
+    // Screen shake
+    this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
+
+    // Flash de impacto
+    this._flashImpact(enemy.x, enemy.y - 16);
+
+    // Combo
+    this._comboCount++;
+    this._comboTimer = this.time.now + 2000;
+    this.game.events.emit(EVENTS.COMBO_CHANGED, this._comboCount);
+
+    // Som (placeholder)
+    this._playSfx('hit');
+  }
+
+  private _onEnemyHitPlayer(enemyHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, playerObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
+    const enemy = enemyHitbox as Enemy;
+    const attack = enemy.getCurrentAttack();
+    if (!attack) return;
+
+    // Valida se pode atingir
+    if (this._player.isInvulnerable()) return;
+    if (this._player.fighterState === FighterState.Dead || this._player.fighterState === FighterState.Knockdown) return;
+
+    // Valida profundidade
+    const laneDiff = Math.abs(this._player.y - enemy.y);
+    const zDiff = Math.abs(this._player.jumpHeight - enemy.jumpHeight);
+    if (laneDiff > LANE_TOLERANCE || zDiff > attack.zTolerance) return;
+
+    // Calcula knockback
+    const knockbackDir = enemy.facingRight ? 1 : -1;
+    const knockbackX = knockbackDir * attack.knockback;
+
+    // Aplica dano ao jogador
+    this._player.takePlayerDamage(attack.damage, knockbackX, attack.knockdown);
+
+    // Hitstop
+    this._hitstopFrames = attack.hitstop;
+
+    // Screen shake
+    this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
+
+    // Flash
+    this._flashImpact(this._player.x, this._player.y - 16);
+
+    // Som
+    this._playSfx('hurt');
+  }
+
+  private _flashImpact(x: number, y: number): void {
+    // Cria uma faísca simples (retângulo branco)
+    const spark = this.add.rectangle(x, y, 8, 8, 0xffffff);
+    spark.setDepth(999);
+
+    this.tweens.add({
+      targets: spark,
+      alpha: 0,
+      scale: 2,
+      duration: 100,
+      onComplete: () => spark.destroy(),
+    });
+  }
+
+  private _playSfx(_name: string): void {
+    // Placeholder para sons
+    // Quando houver assets de áudio:
+    // this.sound.play(name);
+  }
+
+  private _onEnemyDied(_enemy: Enemy): void {
+    // Reseta combo se não houver mais inimigos vivos
+    const aliveEnemies = this._enemies.filter(e => e.fighterState !== 'dead');
+    if (aliveEnemies.length === 0) {
+      this._comboCount = 0;
+      this.game.events.emit(EVENTS.COMBO_CHANGED, 0);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // CENÁRIO
   // ═══════════════════════════════════════════════════════
 
   private _createBackground(): void {
-    // ── Céu (gradiente estático) ─────────────────────────
-    // Camada mais distante: não se move com a câmera
+    // Céu
     const skyGfx = this.add.graphics();
     skyGfx.fillGradientStyle(COLOR_SKY_TOP, COLOR_SKY_TOP, COLOR_SKY_BOTTOM, COLOR_SKY_BOTTOM, 1);
     skyGfx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-    skyGfx.setScrollFactor(0); // fixo na tela
+    skyGfx.setScrollFactor(0);
     skyGfx.setDepth(-100);
 
-    // ── Camada distante (prédios/ruínas silhueta) ────────
-    // Gera uma textura procedural de silhueta
-    this._createFarBgTexture();
+    // Camada distante
     this._bgFar = this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_far_tex');
     this._bgFar.setOrigin(0, 0);
     this._bgFar.setScrollFactor(0);
     this._bgFar.setDepth(-90);
-    // Move lentamente (parallax 0.2x)
-    this._bgFar.setTilePosition(0, 0);
 
-    // ── Camada próxima (árvores/postes destruídos) ──────
-    this._createNearBgTexture();
+    // Camada próxima
     this._bgNear = this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_near_tex');
     this._bgNear.setOrigin(0, 0);
     this._bgNear.setScrollFactor(0);
     this._bgNear.setDepth(-80);
 
-    // ── Chão (área de combate) ───────────────────────────
-    this._createGroundTexture();
-    this._ground = this.add.tileSprite(0, WALK_ZONE_TOP - 5, WORLD_WIDTH, WALK_ZONE_BOTTOM - WALK_ZONE_TOP + 20, 'ground_tex');
-    this._ground.setOrigin(0, 0);
-    this._ground.setDepth(-1);
-  }
-
-  /**
-   * Gera textura procedural para o fundo distante.
-   * Silhueta de prédios/ruínas em tons escuros.
-   */
-  private _createFarBgTexture(): void {
-    const texW = 384;
-    const texH = 224;
-    const gfx = this.add.graphics();
-
-    // Fundo escuro
-    gfx.fillStyle(COLOR_BG_FAR, 1);
-    gfx.fillRect(0, 0, texW, texH);
-
-    // Silhueta de prédios/ruínas
-    gfx.fillStyle(0x15102a, 1);
-    for (let x = 0; x < texW; x += 30) {
-      const h = Phaser.Math.Between(40, 100);
-      const w = Phaser.Math.Between(15, 28);
-      gfx.fillRect(x, texH - 80 - h, w, h + 80);
-    }
-
-    // Janelas iluminadas (pontinhos amarelos)
-    gfx.fillStyle(0x664400, 0.5);
-    for (let i = 0; i < 20; i++) {
-      const wx = Phaser.Math.Between(10, texW - 10);
-      const wy = Phaser.Math.Between(80, texH - 90);
-      gfx.fillRect(wx, wy, 3, 3);
-    }
-
-    gfx.generateTexture('bg_far_tex', texW, texH);
-    gfx.destroy();
-  }
-
-  /**
-   * Gera textura procedural para o fundo próximo.
-   * Silhueta de postes/árvores destruídas.
-   */
-  private _createNearBgTexture(): void {
-    const texW = 384;
-    const texH = 224;
-    const gfx = this.add.graphics();
-
-    // Transparente na maior parte
-    gfx.fillStyle(COLOR_BG_NEAR, 0.3);
-    gfx.fillRect(0, 0, texW, texH);
-
-    // Postes/árvores destruídas
-    gfx.fillStyle(0x2a1a1a, 0.8);
-    for (let x = 0; x < texW; x += 50) {
-      const h = Phaser.Math.Between(30, 70);
-      const w = Phaser.Math.Between(3, 6);
-      gfx.fillRect(x + Phaser.Math.Between(-5, 5), texH - 60 - h, w, h);
-      // Galhos quebrados
-      gfx.fillRect(x + w, texH - 60 - h + 10, Phaser.Math.Between(5, 15), 2);
-    }
-
-    gfx.generateTexture('bg_near_tex', texW, texH);
-    gfx.destroy();
-  }
-
-  /**
-   * Gera textura procedural para o chão (área de combate).
-   */
-  private _createGroundTexture(): void {
-    const texW = 128;
-    const texH = 90;
-    const gfx = this.add.graphics();
-
-    // Cor base do chão
-    gfx.fillStyle(COLOR_GROUND, 1);
-    gfx.fillRect(0, 0, texW, texH);
-
-    // Textura de sujeira/sangue
-    gfx.fillStyle(0x2a2a1a, 0.5);
-    for (let i = 0; i < 15; i++) {
-      const sx = Phaser.Math.Between(0, texW);
-      const sy = Phaser.Math.Between(0, texH);
-      gfx.fillRect(sx, sy, Phaser.Math.Between(2, 8), Phaser.Math.Between(1, 3));
-    }
-
-    // Manchas escuras
-    gfx.fillStyle(0x1a1a0a, 0.3);
-    for (let i = 0; i < 5; i++) {
-      const sx = Phaser.Math.Between(0, texW);
-      const sy = Phaser.Math.Between(0, texH);
-      gfx.fillCircle(sx, sy, Phaser.Math.Between(3, 8));
-    }
-
-    gfx.generateTexture('ground_tex', texW, texH);
-    gfx.destroy();
+    // Chão
+    const ground = this.add.tileSprite(0, WALK_ZONE_TOP - 5, WORLD_WIDTH, WALK_ZONE_BOTTOM - WALK_ZONE_TOP + 20, 'ground_tex');
+    ground.setOrigin(0, 0);
+    ground.setDepth(-1);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -225,36 +292,15 @@ export class GameScene extends Phaser.Scene {
 
   private _setupCamera(): void {
     const cam = this.cameras.main;
-
-    // Limites da câmera (mundo inteiro)
     cam.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-
-    // Segue o jogador suavemente APENAS na horizontal.
-    // O lerp Y = 0 significa que a câmera não segue no eixo vertical.
-    // Como o mundo tem a mesma altura da câmera (224px),
-    // não há espaço para a câmera se mover no Y de qualquer forma.
     cam.startFollow(this._player, true, CAMERA_LERP, 0);
   }
 
-  // ═══════════════════════════════════════════════════════
-  // INDICADORES VISUAIS (debug da zona de walk)
-  // ═══════════════════════════════════════════════════════
-
   private _createZoneIndicators(): void {
-    // Linha sutil no topo da zona de walk
-    const topLine = this.add.rectangle(
-      WORLD_WIDTH / 2, WALK_ZONE_TOP,
-      WORLD_WIDTH, 1,
-      0x444444, 0.3
-    );
+    const topLine = this.add.rectangle(WORLD_WIDTH / 2, WALK_ZONE_TOP, WORLD_WIDTH, 1, 0x444444, 0.3);
     topLine.setDepth(-0.5);
 
-    // Linha sutil na base da zona de walk
-    const bottomLine = this.add.rectangle(
-      WORLD_WIDTH / 2, WALK_ZONE_BOTTOM,
-      WORLD_WIDTH, 1,
-      0x444444, 0.3
-    );
+    const bottomLine = this.add.rectangle(WORLD_WIDTH / 2, WALK_ZONE_BOTTOM, WORLD_WIDTH, 1, 0x444444, 0.3);
     bottomLine.setDepth(-0.5);
   }
 
@@ -263,17 +309,142 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   update(time: number, delta: number): void {
-    // Atualiza o jogador (inclui clamp e salvamento do groundY)
-    this._player.update(time, delta);
+    // Hitstop: congela a simulação
+    if (this._hitstopFrames > 0) {
+      this._hitstopFrames--;
+      return;
+    }
 
-    // ── Parallax: move as camadas conforme a câmera ──────
+    // Atualiza entidades
+    this._player.update(time, delta);
+    for (const enemy of this._enemies) {
+      enemy.update(time, delta);
+    }
+
+    // Combo timer
+    if (this.time.now > this._comboTimer && this._comboCount > 0) {
+      this._comboCount = 0;
+      this.game.events.emit(EVENTS.COMBO_CHANGED, 0);
+    }
+
+    // Parallax
     const camScrollX = this.cameras.main.scrollX;
     this._bgFar.setTilePosition(camScrollX * 0.2, 0);
     this._bgNear.setTilePosition(camScrollX * 0.5, 0);
+
+    // Debug
+    this._handleDebugInput();
+    if (this._debugMode) {
+      this._drawDebug();
+    } else {
+      this._debugGraphics.clear();
+    }
   }
 
   // ═══════════════════════════════════════════════════════
-  // GETTERS (para outras cenas, se necessário)
+  // DEBUG
+  // ═══════════════════════════════════════════════════════
+
+  private _handleDebugInput(): void {
+    if (!this.input.keyboard) return;
+
+    // F1: toggle debug
+    if (Phaser.Input.Keyboard.JustDown(this._f1Key)) {
+      this._debugMode = !this._debugMode;
+    }
+
+    // G: toggle aggressive nos inimigos
+    if (Phaser.Input.Keyboard.JustDown(this._gKey)) {
+      for (const enemy of this._enemies) {
+        enemy.setAggressive(!enemy.aggressive);
+      }
+    }
+  }
+
+  private _drawDebug(): void {
+    this._debugGraphics.clear();
+
+    // Hitbox do jogador
+    const playerHitbox = this._player.getHitboxZone();
+    const playerBody = playerHitbox.body as Phaser.Physics.Arcade.Body;
+    if (playerBody.enable) {
+      this._debugGraphics.lineStyle(1, 0x00ff00, 1);
+      this._debugGraphics.strokeRect(
+        playerHitbox.x - playerBody.width / 2,
+        playerHitbox.y - playerBody.height / 2,
+        playerBody.width,
+        playerBody.height
+      );
+    }
+
+    // Hurtbox do jogador
+    const playerPhysBody = this._player.body as Phaser.Physics.Arcade.Body;
+    this._debugGraphics.lineStyle(1, 0x0088ff, 1);
+    this._debugGraphics.strokeRect(
+      this._player.x + playerPhysBody.offset.x,
+      this._player.y + playerPhysBody.offset.y,
+      playerPhysBody.width,
+      playerPhysBody.height
+    );
+
+    // Hitboxes e hurtboxes dos inimigos
+    for (const enemy of this._enemies) {
+      if (enemy.fighterState === FighterState.Dead) continue;
+
+      // Hitbox
+      const enemyHitbox = enemy.getHitboxZone();
+      const enemyHitboxBody = enemyHitbox.body as Phaser.Physics.Arcade.Body;
+      if (enemyHitboxBody.enable) {
+        this._debugGraphics.lineStyle(1, 0xff0000, 1);
+        this._debugGraphics.strokeRect(
+          enemyHitbox.x - enemyHitboxBody.width / 2,
+          enemyHitbox.y - enemyHitboxBody.height / 2,
+          enemyHitboxBody.width,
+          enemyHitboxBody.height
+        );
+      }
+
+      // Hurtbox
+      const enemyPhysBody = enemy.body as Phaser.Physics.Arcade.Body;
+      this._debugGraphics.lineStyle(1, 0xff8800, 1);
+      this._debugGraphics.strokeRect(
+        enemy.x + enemyPhysBody.offset.x,
+        enemy.y + enemyPhysBody.offset.y,
+        enemyPhysBody.width,
+        enemyPhysBody.height
+      );
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // POSTUPDATE (via evento)
+  // ═══════════════════════════════════════════════════════
+
+  private _onPostUpdate = (): void => {
+    this._player.postPhysicsUpdate();
+    for (const enemy of this._enemies) {
+      enemy.postPhysicsUpdate();
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════
+  // CLEANUP
+  // ═══════════════════════════════════════════════════════
+
+  private _onShutdown = (): void => {
+    // Remove listeners
+    this.game.events.off(EVENTS.ENEMY_DIED, this._onEnemyDied, this);
+    this.events.off('postupdate', this._onPostUpdate, this);
+
+    // Limpa entidades
+    this._player?.cleanup();
+    for (const enemy of this._enemies) {
+      enemy?.cleanup();
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════
+  // GETTERS
   // ═══════════════════════════════════════════════════════
 
   get playerState(): PlayerState { return this._playerState; }

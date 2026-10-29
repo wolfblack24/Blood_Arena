@@ -4,13 +4,9 @@
  * Primeira cena do jogo. Responsável por:
  * - Mostrar uma barra de loading simples
  * - Iniciar a PreloadScene (que carrega os assets de verdade)
- *
- * Nesta fase, como não há assets externos, o Boot
- * é praticamente um pass-through para a Preload.
  */
 
 import Phaser from 'phaser';
-import { PreloadScene } from './PreloadScene';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -36,7 +32,7 @@ export class BootScene extends Phaser.Scene {
       fontFamily: 'monospace',
     }).setOrigin(0.5);
 
-    // Preenche a barra instantaneamente (sem assets para carregar)
+    // Preenche a barra
     const bar = this.add.rectangle(x, y, 0, barHeight, 0x00ff00)
       .setOrigin(0, 0.5);
 
@@ -47,7 +43,6 @@ export class BootScene extends Phaser.Scene {
       duration: 500,
       ease: 'Linear',
       onComplete: () => {
-        // Após a "carga", vai para a PreloadScene
         this.scene.start('PreloadScene');
       },
     });
