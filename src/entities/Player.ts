@@ -53,6 +53,7 @@ export class Player extends Fighter {
   private _comboIndex: number = 0;
   private _lastAttackEndTime: number = 0;
   private _hitTargets: Set<Fighter> = new Set();
+  private _canStartNewCombo: boolean = true;
 
   // ── Timers de estado ───────────────────────────────────
   private _stateTimer: number = 0;
@@ -139,20 +140,24 @@ export class Player extends Fighter {
   // ═══════════════════════════════════════════════════════
 
   private _processInput(delta: number): void {
-    // Ataque (processado primeiro para permitir encadeamento de combo)
+    if (this._fighterState === FighterState.Dead) return;
+
+    // Resetar a permissão de novo combo se a tecla de ataque for solta
+    if (!this._attackKey.isDown) {
+      this._canStartNewCombo = true;
+    }
+
+    // Processar ataque primeiro para permitir combos durante a animação
     this._handleAttack();
 
-    // Estados que bloqueiam movimento e pulo
-    if (this._fighterState === FighterState.Hurt || 
+    // Bloquear movimento e outras ações durante estados restritivos
+    if (this._fighterState === FighterState.Hurt ||
         this._fighterState === FighterState.Knockdown ||
         this._fighterState === FighterState.Attack) {
       return;
     }
 
-    // Movimento
     this._handleMovement();
-
-    // Pulo
     this._handleJump();
   }
 
@@ -228,7 +233,10 @@ export class Player extends Fighter {
       return;
     }
 
-    // Se não está atacando, inicia novo ataque
+    // Se não está atacando, só inicia novo ataque se pode começar novo combo
+    // (evita loop infinito quando a tecla está segurada)
+    if (!this._canStartNewCombo) return;
+
     // Verifica janela de combo para incrementar o índice
     if (now - this._lastAttackEndTime < COMBO_WINDOW) {
       this._comboIndex = Math.min(this._comboIndex + 1, PLAYER_ATTACKS.length - 1);
@@ -241,6 +249,9 @@ export class Player extends Fighter {
 
   private _startAttack(): void {
     const now = this.scene.time.now;
+
+    // Bloqueia novo combo até que a tecla seja solta
+    this._canStartNewCombo = false;
 
     // Escolhe o ataque
     let attackData: AttackData;

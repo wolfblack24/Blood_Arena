@@ -113,9 +113,10 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
     // Pode transicionar de hurt para qualquer coisa
     if (from === FighterState.Hurt) return true;
 
-    // Pode transicionar de attack para hurt/knockdown/dead
+    // Pode transicionar de attack para idle/walk/jump (fim do ataque) ou hurt/knockdown/dead (interrupção)
     if (from === FighterState.Attack) {
-      return to === FighterState.Hurt || to === FighterState.Knockdown || to === FighterState.Dead;
+      return to === FighterState.Idle || to === FighterState.Walk || to === FighterState.Jump ||
+             to === FighterState.Hurt || to === FighterState.Knockdown || to === FighterState.Dead;
     }
 
     // Transições normais
