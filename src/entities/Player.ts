@@ -23,7 +23,6 @@ import {
   WALK_ZONE_BOTTOM,
   STAMINA_REGEN_RATE,
   COMBO_WINDOW,
-  INPUT_BUFFER,
   KNOCKDOWN_DURATION,
   HURT_STUN_DURATION,
   INVULNERABILITY_DURATION,
@@ -53,7 +52,6 @@ export class Player extends Fighter {
   private _attackStartTime: number = 0;
   private _comboIndex: number = 0;
   private _lastAttackEndTime: number = 0;
-  private _attackBufferTime: number = 0;
   private _hitTargets: Set<Fighter> = new Set();
 
   // ── Timers de estado ───────────────────────────────────
@@ -141,12 +139,10 @@ export class Player extends Fighter {
   // ═══════════════════════════════════════════════════════
 
   private _processInput(delta: number): void {
-    // Buffer de input para ataque
-    if (Phaser.Input.Keyboard.JustDown(this._attackKey)) {
-      this._attackBufferTime = this.scene.time.now + INPUT_BUFFER;
-    }
+    // Ataque (processado primeiro para permitir encadeamento de combo)
+    this._handleAttack();
 
-    // Estados que bloqueiam input
+    // Estados que bloqueiam movimento e pulo
     if (this._fighterState === FighterState.Hurt || 
         this._fighterState === FighterState.Knockdown ||
         this._fighterState === FighterState.Attack) {
@@ -158,9 +154,6 @@ export class Player extends Fighter {
 
     // Pulo
     this._handleJump();
-
-    // Ataque
-    this._handleAttack();
   }
 
   private _handleMovement(): void {
@@ -219,22 +212,24 @@ export class Player extends Fighter {
   private _handleAttack(): void {
     const now = this.scene.time.now;
 
-    // Verifica buffer de input
-    if (now > this._attackBufferTime) return;
+    // Verifica se a tecla de ataque foi pressionada
+    if (!Phaser.Input.Keyboard.JustDown(this._attackKey)) return;
 
-    // Verifica se pode atacar
-    if (this._fighterState === FighterState.Attack) {
-      // Verifica se está na janela de combo
-      const totalTime = this._currentAttack!.startup + this._currentAttack!.active + this._currentAttack!.recovery;
+    // Se já está atacando, verifica se pode encadear combo
+    if (this._fighterState === FighterState.Attack && this._currentAttack) {
+      const totalTime = this._currentAttack.startup + this._currentAttack.active + this._currentAttack.recovery;
       const elapsed = now - this._attackStartTime;
-      if (elapsed < totalTime && elapsed > totalTime - COMBO_WINDOW) {
-        // Pode encadear próximo golpe
+      
+      // Só permite encadear se estiver na janela de combo no final da animação
+      if (elapsed >= totalTime - COMBO_WINDOW && elapsed < totalTime) {
         this._startAttack();
       }
+      // Se não está na janela, ignora o input (evita spam)
       return;
     }
 
-    // Verifica janela de combo
+    // Se não está atacando, inicia novo ataque
+    // Verifica janela de combo para incrementar o índice
     if (now - this._lastAttackEndTime < COMBO_WINDOW) {
       this._comboIndex = Math.min(this._comboIndex + 1, PLAYER_ATTACKS.length - 1);
     } else {
@@ -246,7 +241,6 @@ export class Player extends Fighter {
 
   private _startAttack(): void {
     const now = this.scene.time.now;
-    this._attackBufferTime = 0;
 
     // Escolhe o ataque
     let attackData: AttackData;
