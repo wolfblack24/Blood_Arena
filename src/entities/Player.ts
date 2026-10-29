@@ -54,12 +54,10 @@ export class Player extends Fighter {
   private _lastAttackEndTime: number = 0;
   private _hitTargets: Set<Fighter> = new Set();
   private _canStartNewCombo: boolean = true;
+  private _attackTimers?: Phaser.Time.TimerEvent[];
 
   // ── Buffer de input ────────────────────────────────────
-  private _attackBufferUntil: number = 0;
-
-  // ── Timers de ataque ───────────────────────────────────
-  private _attackTimers: Phaser.Time.TimerEvent[] = [];
+  private _attackBufferTime: number = 0;
 
   // ── Timers de estado ───────────────────────────────────
   private _stateEndTime: number = 0;
@@ -161,7 +159,7 @@ export class Player extends Fighter {
 
     // Captura buffer de input para ataque
     if (Phaser.Input.Keyboard.JustDown(this._attackKey)) {
-      this._attackBufferUntil = this.scene.time.now + INPUT_BUFFER;
+      this._attackBufferTime = this.scene.time.now + INPUT_BUFFER;
     }
 
     // Processar ataque primeiro para permitir combos durante a animação
@@ -234,44 +232,28 @@ export class Player extends Fighter {
   private _handleAttack(): void {
     const now = this.scene.time.now;
 
-    // Não pode atacar em Hurt, Knockdown ou Dead
-    if (this._fighterState === FighterState.Hurt ||
-        this._fighterState === FighterState.Knockdown ||
-        this._fighterState === FighterState.Dead) {
-      return;
-    }
-
-    // Se já está atacando, verifica se pode encadear combo
-    if (this._fighterState === FighterState.Attack && this._currentAttack) {
-      const totalTime = this._currentAttack.startup + this._currentAttack.active + this._currentAttack.recovery;
-      const elapsed = now - this._attackStartTime;
-
-      // Só permite encadear se estiver na janela de combo no final da animação
-      if (elapsed >= totalTime - COMBO_WINDOW && elapsed < totalTime) {
-        // Avança o combo com módulo (3º golpe volta ao 1º)
-        this._comboIndex = (this._comboIndex + 1) % PLAYER_ATTACKS.length;
-        this._startAttack();
-      }
-      // Se não está na janela, ignora o input (evita spam)
-      return;
-    }
-
-    // Se não está atacando, só inicia novo ataque se pode começar novo combo
-    // (evita loop infinito quando a tecla está segurada)
-    if (!this._canStartNewCombo) return;
-
     // Verifica buffer de input
-    if (now > this._attackBufferUntil) return;
+    if (now > this._attackBufferTime) return;
 
-    // Limpa o buffer
-    this._attackBufferUntil = 0;
+    // Se já está atacando, verifica se está na janela de combo
+    if (this._fighterState === FighterState.Attack) {
+        // Verifica se está na janela de combo
+        const totalTime = this._currentAttack!.startup + this._currentAttack!.active + this._currentAttack!.recovery;
+        const elapsed = now - this._attackStartTime;
+        
+        if (elapsed < totalTime && elapsed > totalTime - COMBO_WINDOW) {
+            // CANCELA OS TIMERS ANTERIORES antes de iniciar o próximo ataque
+            this._cancelAttackTimers();
+            this._startAttack();
+        }
+        return;
+    }
 
-    // Verifica janela de combo para incrementar o índice
+    // Verifica janela de combo
     if (now - this._lastAttackEndTime < COMBO_WINDOW) {
-      // Avança o combo com módulo (3º golpe volta ao 1º)
-      this._comboIndex = (this._comboIndex + 1) % PLAYER_ATTACKS.length;
+        this._comboIndex = Math.min(this._comboIndex + 1, PLAYER_ATTACKS.length - 1);
     } else {
-      this._comboIndex = 0;
+        this._comboIndex = 0;
     }
 
     this._startAttack();
@@ -279,74 +261,68 @@ export class Player extends Fighter {
 
   private _startAttack(): void {
     const now = this.scene.time.now;
-
-    // Bloqueia novo combo até que a tecla seja solta
-    this._canStartNewCombo = false;
-
-    // Cancela timers anteriores (encadeamento de combo)
-    this._cancelAttackTimers();
+    this._attackBufferTime = 0;
 
     // Escolhe o ataque
     let attackData: AttackData;
     if (!this._isGrounded) {
-      attackData = PLAYER_AIR_ATTACK;
+        attackData = PLAYER_AIR_ATTACK;
     } else {
-      attackData = PLAYER_ATTACKS[this._comboIndex];
+        attackData = PLAYER_ATTACKS[this._comboIndex];
     }
 
     this._currentAttack = attackData;
     this._attackStartTime = now;
     this._hitTargets.clear();
 
-    // Muda estado (forceRestart=true para encadeamento de combo)
-    this.changeState(FighterState.Attack, true);
-
-    // Deslize: zera velocidade no chão, mantém momentum no ar
-    if (this._isGrounded) {
-      const body = this.body as Phaser.Physics.Arcade.Body;
-      body.setVelocity(0, 0);
-    }
+    // Muda estado
+    this.changeState(FighterState.Attack);
 
     // Agenda ativação da hitbox
-    const t1 = this.scene.time.delayedCall(attackData.startup, () => {
-      this._activateHitbox();
+    const activateTimer = this.scene.time.delayedCall(attackData.startup, () => {
+        this._activateHitbox();
     });
-    this._attackTimers.push(t1);
 
     // Agenda desativação da hitbox
-    const t2 = this.scene.time.delayedCall(attackData.startup + attackData.active, () => {
-      this._deactivateHitbox();
+    const deactivateTimer = this.scene.time.delayedCall(attackData.startup + attackData.active, () => {
+        this._deactivateHitbox();
     });
-    this._attackTimers.push(t2);
 
     // Agenda fim do ataque
     const totalTime = attackData.startup + attackData.active + attackData.recovery;
-    const t3 = this.scene.time.delayedCall(totalTime, () => {
-      this._endAttack();
+    const endTimer = this.scene.time.delayedCall(totalTime, () => {
+        this._endAttack();
     });
-    this._attackTimers.push(t3);
+
+    // Armazena os timers para poder cancelá-los
+    this._attackTimers = [activateTimer, deactivateTimer, endTimer];
   }
 
-  /**
-   * Cancela todos os timers de ataque agendados.
-   */
   private _cancelAttackTimers(): void {
-    for (const timer of this._attackTimers) {
-      if (timer && !timer.hasDispatched) {
-        timer.remove(false);
-      }
+    if (this._attackTimers) {
+        this._attackTimers.forEach(timer => {
+            if (timer && !timer.hasDispatched) {
+                timer.remove();
+            }
+        });
     }
-    this._attackTimers = [];
+    this._attackTimers = undefined;
   }
 
-  /**
-   * Cancela o ataque atual (chamado ao levar dano, morrer ou respawnar).
-   */
-  private _cancelAttack(): void {
-    this._cancelAttackTimers();
+  private _endAttack(): void {
     this._currentAttack = undefined;
+    this._lastAttackEndTime = this.scene.time.now;
     this._deactivateHitbox();
-    this._hitTargets.clear();
+    this._cancelAttackTimers(); // Garante que todos os timers sejam limpos
+
+    // Volta ao estado idle ou walk
+    if (this._isGrounded) {
+        const body = this.body as Phaser.Physics.Arcade.Body;
+        const isMoving = Math.abs(body.velocity.x) > 10 || Math.abs(body.velocity.y) > 10;
+        this.changeState(isMoving ? FighterState.Walk : FighterState.Idle);
+    } else {
+        this.changeState(FighterState.Jump);
+    }
   }
 
   private _activateHitbox(): void {
@@ -359,27 +335,14 @@ export class Player extends Fighter {
     this._hitboxBody.enable = false;
   }
 
-  private _endAttack(): void {
-    // Só muda o estado se ainda estiver em Attack
-    // (pode ter sido interrompido por dano)
-    if (this._fighterState !== FighterState.Attack) {
-      this._currentAttack = undefined;
-      this._deactivateHitbox();
-      return;
-    }
-
+  /**
+   * Cancela o ataque atual (chamado ao levar dano, morrer ou respawnar).
+   */
+  private _cancelAttack(): void {
+    this._cancelAttackTimers();
     this._currentAttack = undefined;
-    this._lastAttackEndTime = this.scene.time.now;
     this._deactivateHitbox();
-
-    // Volta ao estado idle ou walk
-    if (this._isGrounded) {
-      const body = this.body as Phaser.Physics.Arcade.Body;
-      const isMoving = Math.abs(body.velocity.x) > 10 || Math.abs(body.velocity.y) > 10;
-      this.changeState(isMoving ? FighterState.Walk : FighterState.Idle);
-    } else {
-      this.changeState(FighterState.Jump);
-    }
+    this._hitTargets.clear();
   }
 
   private _updateHitboxPosition(): void {
