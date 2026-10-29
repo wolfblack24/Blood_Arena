@@ -1,14 +1,14 @@
 /**
  * Enemy.ts
  * ─────────────────────────────────────────────────────────
- * Inimigo de teste (Dummy). Herda de Fighter.
+ * Inimigo com IA completa. Herda de Fighter.
  *
  * Funcionalidades:
- * - HP próprio (não usa PlayerState)
+ * - FSM de IA: IDLE, PATROL, CHASE, ATTACK, HURT, DEAD
+ * - Comportamento de Beat 'em Up (alinha na pista do jogador)
  * - Barra de vida sobre a cabeça
- * - Estados: idle, hurt, knockdown, dead
- * - Flag 'aggressive': quando ligada, ataca a cada ~2s
- * - Ao morrer, soma pontos via PlayerState.addScore
+ * - Suporte a Object Pooling (resetEnemy)
+ * - Ao morrer, emite evento com posição para partículas/loot
  */
 
 import Phaser from 'phaser';
@@ -19,8 +19,42 @@ import {
   ENEMY_SCORE_VALUE,
   KNOCKDOWN_DURATION,
   HURT_STUN_DURATION,
+  ENEMY_AGGRO_RADIUS,
+  ENEMY_ATTACK_RADIUS,
+  ENEMY_PATROL_SPEED,
+  ENEMY_CHASE_SPEED,
+  ENEMY_ATTACK_COOLDOWN,
+  ENEMY_PATROL_CHANGE_TIME,
+  ENEMY_LANE_ALIGN_TOLERANCE,
+  WORLD_WIDTH,
+  WALK_ZONE_TOP,
+  WALK_ZONE_BOTTOM,
   EVENTS,
 } from '../config/constants';
+
+/**
+ * Estados da FSM de IA do inimigo.
+ */
+export enum EnemyAIState {
+  IDLE = 'IDLE',
+  PATROL = 'PATROL',
+  CHASE = 'CHASE',
+  ATTACK = 'ATTACK',
+  HURT = 'HURT',
+  DEAD = 'DEAD',
+}
+
+/**
+ * Configuração do inimigo (para pooling).
+ */
+export interface EnemyConfig {
+  hp?: number;
+  aggroRadius?: number;
+  attackRadius?: number;
+  patrolSpeed?: number;
+  chaseSpeed?: number;
+  attackCooldown?: number;
+}
 
 export class Enemy extends Fighter {
   // ── Barra de vida ──────────────────────────────────────
@@ -33,15 +67,30 @@ export class Enemy extends Fighter {
   private _currentAttack?: AttackData;
   private _attackStartTime: number = 0;
 
-  // ── IA ─────────────────────────────────────────────────
-  private _aggressive: boolean = false;
-  private _nextAttackTime: number = 0;
+  // ── FSM de IA ──────────────────────────────────────────
+  private _aiState: EnemyAIState = EnemyAIState.IDLE;
 
-  // ── Timers de estado ───────────────────────────────────
+  // ── Configuração de IA ─────────────────────────────────
+  private _aggroRadius: number = ENEMY_AGGRO_RADIUS;
+  private _attackRadius: number = ENEMY_ATTACK_RADIUS;
+  private _patrolSpeed: number = ENEMY_PATROL_SPEED;
+  private _chaseSpeed: number = ENEMY_CHASE_SPEED;
+  private _attackCooldown: number = ENEMY_ATTACK_COOLDOWN;
+
+  // ── Timers de IA ───────────────────────────────────────
+  private _nextAttackTime: number = 0;
+  private _patrolDirection: number = 1; // 1 = direita, -1 = esquerda
+  private _patrolChangeTime: number = 0;
   private _stateEndTime: number = 0;
+
+  // ── Referência ao jogador ──────────────────────────────
+  private _player?: Fighter;
 
   // ── Referência ao PlayerState (para score) ─────────────
   private _playerState?: { addScore: (points: number) => void };
+
+  // ── Flag para Object Pooling ───────────────────────────
+  private _isActive: boolean = true;
 
   constructor(
     scene: Phaser.Scene,
@@ -66,8 +115,81 @@ export class Enemy extends Fighter {
     this._hitboxBody.enable = false;
     this._hitboxBody.setAllowGravity(false);
 
-    // ── Agendamento de primeiro ataque ───────────────────
-    this._nextAttackTime = scene.time.now + 2000;
+    // ── Inicializa timers ────────────────────────────────
+    this._nextAttackTime = scene.time.now + this._attackCooldown;
+    this._patrolChangeTime = scene.time.now + ENEMY_PATROL_CHANGE_TIME;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // OBJECT POOLING
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Reseta o inimigo para reutilização no pool.
+   */
+  resetEnemy(x: number, y: number, config?: EnemyConfig): void {
+    // Aplica configuração customizada
+    if (config) {
+      if (config.hp !== undefined) this._hpMax = config.hp;
+      if (config.aggroRadius !== undefined) this._aggroRadius = config.aggroRadius;
+      if (config.attackRadius !== undefined) this._attackRadius = config.attackRadius;
+      if (config.patrolSpeed !== undefined) this._patrolSpeed = config.patrolSpeed;
+      if (config.chaseSpeed !== undefined) this._chaseSpeed = config.chaseSpeed;
+      if (config.attackCooldown !== undefined) this._attackCooldown = config.attackCooldown;
+    } else {
+      // Reset para valores padrão
+      this._hpMax = ENEMY_HP_MAX;
+      this._aggroRadius = ENEMY_AGGRO_RADIUS;
+      this._attackRadius = ENEMY_ATTACK_RADIUS;
+      this._patrolSpeed = ENEMY_PATROL_SPEED;
+      this._chaseSpeed = ENEMY_CHASE_SPEED;
+      this._attackCooldown = ENEMY_ATTACK_COOLDOWN;
+    }
+
+    // Reset HP
+    this._hp = this._hpMax;
+
+    // Reset estado
+    this._aiState = EnemyAIState.IDLE;
+    this._fighterState = FighterState.Idle;
+    this._isActive = true;
+
+    // Reset posição
+    this.setPosition(x, y);
+    this._shadow.setPosition(x, y);
+
+    // Reativa corpo físico
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.enable = true;
+    body.setVelocity(0, 0);
+
+    // Torna visível
+    this.setVisible(true);
+    this.setAlpha(1);
+
+    // Reset timers
+    const now = this.scene.time.now;
+    this._nextAttackTime = now + this._attackCooldown;
+    this._patrolChangeTime = now + ENEMY_PATROL_CHANGE_TIME;
+    this._patrolDirection = 1;
+
+    // Atualiza barra de vida
+    this._updateHPBar();
+    this._updateHPBarPosition();
+  }
+
+  /**
+   * Define o jogador para a IA perseguir.
+   */
+  setPlayer(player: Fighter): void {
+    this._player = player;
+  }
+
+  /**
+   * Verifica se o inimigo está ativo (para pooling).
+   */
+  get isActive(): boolean {
+    return this._isActive;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -75,18 +197,16 @@ export class Enemy extends Fighter {
   // ═══════════════════════════════════════════════════════
 
   update(_time: number, delta: number): void {
-    if (this._fighterState === FighterState.Dead) return;
+    if (!this._isActive) return;
 
     // Atualiza eixo Z
     this._updateJumpAxis(delta);
 
-    // Atualiza timers de estado
-    this._updateStateTimers();
+    // FSM de IA
+    this._updateAI(delta);
 
-    // IA agressiva
-    if (this._aggressive && this._fighterState === FighterState.Idle) {
-      this._tryAttack();
-    }
+    // Atualiza timers de estado (hurt/knockdown)
+    this._updateStateTimers();
 
     // Atualiza profundidade
     this._updateDepth();
@@ -99,6 +219,8 @@ export class Enemy extends Fighter {
    * Chamado no postupdate da GameScene.
    */
   postPhysicsUpdate(): void {
+    if (!this._isActive) return;
+
     this.clampToWalkZone();
     this.applyJumpVisualOffset();
     this._updateHitboxPosition();
@@ -106,38 +228,176 @@ export class Enemy extends Fighter {
   }
 
   // ═══════════════════════════════════════════════════════
-  // IA
+  // FSM DE IA
   // ═══════════════════════════════════════════════════════
 
-  /**
-   * Liga/desliga modo agressivo.
-   */
-  setAggressive(value: boolean): void {
-    this._aggressive = value;
-    this._nextAttackTime = this.scene.time.now + 2000;
+  private _updateAI(delta: number): void {
+    // DEAD: não faz nada
+    if (this._aiState === EnemyAIState.DEAD) return;
+
+    // HURT: aguarda timer de stun
+    if (this._aiState === EnemyAIState.HURT) {
+      const body = this.body as Phaser.Physics.Arcade.Body;
+      body.setVelocity(0, 0);
+      return;
+    }
+
+    // ATTACK: aguarda fim do ataque
+    if (this._aiState === EnemyAIState.ATTACK) {
+      return;
+    }
+
+    // Se não tem jogador, fica em IDLE
+    if (!this._player || this._player.fighterState === FighterState.Dead) {
+      this._changeAIState(EnemyAIState.IDLE);
+      return;
+    }
+
+    // Calcula distância até o jogador
+    const distance = Phaser.Math.Distance.Between(
+      this.x, this.y,
+      this._player.x, this._player.y
+    );
+
+    // Transições de estado baseadas na distância
+    if (distance <= this._attackRadius) {
+      // Dentro do raio de ataque
+      if (this.scene.time.now >= this._nextAttackTime) {
+        this._changeAIState(EnemyAIState.ATTACK);
+      } else {
+        this._changeAIState(EnemyAIState.IDLE);
+      }
+    } else if (distance <= this._aggroRadius) {
+      // Dentro do raio de aggro, mas fora do raio de ataque
+      this._changeAIState(EnemyAIState.CHASE);
+    } else {
+      // Fora do raio de aggro
+      if (this._aiState !== EnemyAIState.PATROL && this._aiState !== EnemyAIState.IDLE) {
+        this._changeAIState(EnemyAIState.IDLE);
+      }
+    }
+
+    // Comportamentos de estado
+    if (this._aiState === EnemyAIState.IDLE) {
+      this._behaviorIdle(delta);
+    } else if (this._aiState === EnemyAIState.PATROL) {
+      this._behaviorPatrol(delta);
+    } else if (this._aiState === EnemyAIState.CHASE) {
+      this._behaviorChase(delta);
+    } else if (this._aiState === EnemyAIState.ATTACK) {
+      this._behaviorAttack();
+    }
   }
 
-  get aggressive(): boolean { return this._aggressive; }
+  private _changeAIState(newState: EnemyAIState): void {
+    if (this._aiState === newState) return;
+    this._aiState = newState;
+  }
 
-  private _tryAttack(): void {
-    const now = this.scene.time.now;
-    if (now < this._nextAttackTime) return;
+  // ═══════════════════════════════════════════════════════
+  // COMPORTAMENTOS
+  // ═══════════════════════════════════════════════════════
 
+  private _behaviorIdle(_delta: number): void {
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.setVelocity(0, 0);
+
+    // Transiciona para PATROL após um tempo
+    if (this.scene.time.now >= this._patrolChangeTime) {
+      this._changeAIState(EnemyAIState.PATROL);
+      this._patrolChangeTime = this.scene.time.now + ENEMY_PATROL_CHANGE_TIME;
+    }
+
+    // Atualiza estado do Fighter
+    if (this._fighterState !== FighterState.Idle) {
+      this.changeState(FighterState.Idle);
+    }
+  }
+
+  private _behaviorPatrol(_delta: number): void {
+    const body = this.body as Phaser.Physics.Arcade.Body;
+
+    // Move na direção da patrulha
+    body.setVelocityX(this._patrolSpeed * this._patrolDirection);
+    body.setVelocityY(0);
+
+    // Atualiza facing
+    this.setFacing(this._patrolDirection > 0);
+
+    // Inverte direção ao bater nos limites ou após tempo
+    if (this.x <= 20 || this.x >= WORLD_WIDTH - 20) {
+      this._patrolDirection *= -1;
+    } else if (this.scene.time.now >= this._patrolChangeTime) {
+      this._patrolDirection *= -1;
+      this._patrolChangeTime = this.scene.time.now + ENEMY_PATROL_CHANGE_TIME;
+    }
+
+    // Atualiza estado do Fighter
+    if (this._fighterState !== FighterState.Walk) {
+      this.changeState(FighterState.Walk);
+    }
+  }
+
+  private _behaviorChase(_delta: number): void {
+    if (!this._player) return;
+
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    const dx = this._player.x - this.x;
+    const dy = this._player.y - this.y;
+
+    // Atualiza facing para olhar para o jogador
+    this.setFacing(dx > 0);
+
+    // Alinha na pista do jogador (eixo Y)
+    if (Math.abs(dy) > ENEMY_LANE_ALIGN_TOLERANCE) {
+      const yDir = dy > 0 ? 1 : -1;
+      body.setVelocityY(this._chaseSpeed * yDir * 0.7); // mais lento no Y
+    } else {
+      body.setVelocityY(0);
+    }
+
+    // Move no eixo X em direção ao jogador
+    const xDir = dx > 0 ? 1 : -1;
+    body.setVelocityX(this._chaseSpeed * xDir);
+
+    // Atualiza estado do Fighter
+    if (this._fighterState !== FighterState.Walk) {
+      this.changeState(FighterState.Walk);
+    }
+  }
+
+  private _behaviorAttack(): void {
+    if (!this._player) return;
+
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.setVelocity(0, 0);
+
+    // Atualiza facing para olhar para o jogador
+    const dx = this._player.x - this.x;
+    this.setFacing(dx > 0);
+
+    // Inicia o ataque
     this._startAttack();
-    this._nextAttackTime = now + 2000; // próximo ataque em 2s
   }
+
+  // ═══════════════════════════════════════════════════════
+  // ATAQUE
+  // ═══════════════════════════════════════════════════════
 
   private _startAttack(): void {
     this._currentAttack = ENEMY_ATTACK;
     this._attackStartTime = this.scene.time.now;
+    this._aiState = EnemyAIState.ATTACK;
     this.changeState(FighterState.Attack);
 
     const totalTime = ENEMY_ATTACK.startup + ENEMY_ATTACK.active + ENEMY_ATTACK.recovery;
 
     // Ativa hitbox
     this.scene.time.delayedCall(ENEMY_ATTACK.startup, () => {
-      this._hitboxBody.enable = true;
-      this._hitboxBody.setSize(ENEMY_ATTACK.hitboxWidth, ENEMY_ATTACK.hitboxHeight);
+      if (this._aiState === EnemyAIState.ATTACK) {
+        this._hitboxBody.enable = true;
+        this._hitboxBody.setSize(ENEMY_ATTACK.hitboxWidth, ENEMY_ATTACK.hitboxHeight);
+      }
     });
 
     // Desativa hitbox
@@ -154,6 +414,8 @@ export class Enemy extends Fighter {
   private _endAttack(): void {
     this._currentAttack = undefined;
     this._hitboxBody.enable = false;
+    this._nextAttackTime = this.scene.time.now + this._attackCooldown;
+    this._aiState = EnemyAIState.IDLE;
     this.changeState(FighterState.Idle);
   }
 
@@ -187,6 +449,7 @@ export class Enemy extends Fighter {
   takeEnemyDamage(amount: number, knockbackX: number = 0, knockdown: boolean = false): boolean {
     if (this.isInvulnerable()) return false;
     if (this._fighterState === FighterState.Dead) return false;
+    if (!this._isActive) return false;
 
     const died = this.takeDamage(amount, knockbackX, knockdown);
 
@@ -202,27 +465,37 @@ export class Enemy extends Fighter {
       } else {
         this._stateEndTime = this.scene.time.now + HURT_STUN_DURATION;
       }
+
+      // Muda estado da IA
+      this._aiState = EnemyAIState.HURT;
     }
 
     return died;
   }
 
   private _handleDeath(): void {
+    this._aiState = EnemyAIState.DEAD;
     this.changeState(FighterState.Dead);
     this._hitboxBody.enable = false;
+
+    // Desabilita corpo físico
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.enable = false;
 
     // Soma pontos
     if (this._playerState) {
       this._playerState.addScore(ENEMY_SCORE_VALUE);
     }
 
-    // Emite evento
-    this.scene.game.events.emit(EVENTS.ENEMY_DIED, this);
+    // Emite evento com posição para partículas
+    this.scene.game.events.emit(EVENTS.ENEMY_DIED, this, this.x, this.y);
 
-    // Remove após animação
-    this.scene.time.delayedCall(1000, () => {
-      this.cleanup();
-      this.destroy();
+    // Marca como inativo para pooling
+    this._isActive = false;
+
+    // Torna invisível após animação
+    this.scene.time.delayedCall(500, () => {
+      this.setVisible(false);
     });
   }
 
@@ -233,7 +506,9 @@ export class Enemy extends Fighter {
   private _updateStateTimers(): void {
     const now = this.scene.time.now;
 
+    // Hurt/Knockdown
     if ((this._fighterState === FighterState.Hurt || this._fighterState === FighterState.Knockdown) && now >= this._stateEndTime) {
+      this._aiState = EnemyAIState.IDLE;
       this.changeState(FighterState.Idle);
     }
   }
@@ -252,6 +527,10 @@ export class Enemy extends Fighter {
     this._hpBar.setPosition(this.x, this.y - 38 - this._jumpHeight);
     this._hpBarBg.setDepth(this.y + 1);
     this._hpBar.setDepth(this.y + 1);
+
+    // Esconde barra se estiver invisível
+    this._hpBarBg.setVisible(this.visible);
+    this._hpBar.setVisible(this.visible);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -263,5 +542,13 @@ export class Enemy extends Fighter {
     this._hpBarBg.destroy();
     this._hpBar.destroy();
     this._hitboxZone.destroy();
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // GETTERS
+  // ═══════════════════════════════════════════════════════
+
+  get aiState(): EnemyAIState {
+    return this._aiState;
   }
 }

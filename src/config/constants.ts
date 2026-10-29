@@ -45,6 +45,17 @@ export const LANE_TOLERANCE = 15;      // tolerância de faixa para hit (pixels)
 export const ENEMY_HP_MAX = 40;
 export const ENEMY_SCORE_VALUE = 100;  // pontos ao derrotar
 
+// ── IA do Inimigo ──────────────────────────────────────────
+export const ENEMY_AGGRO_RADIUS = 250;      // raio para detectar o jogador (pixels)
+export const ENEMY_ATTACK_RADIUS = 40;      // raio para iniciar ataque (pixels)
+export const ENEMY_PATROL_SPEED = 40;       // velocidade de patrulha (pixels/seg)
+export const ENEMY_CHASE_SPEED = 80;        // velocidade de perseguição (pixels/seg)
+export const ENEMY_ATTACK_COOLDOWN = 1500;  // cooldown entre ataques (ms)
+export const ENEMY_PATROL_CHANGE_TIME = 2000; // tempo para mudar direção na patrulha (ms)
+export const ENEMY_LANE_ALIGN_TOLERANCE = 10; // tolerância para alinhar na mesma pista (pixels)
+export const ENEMY_POOL_MAX_SIZE = 10;      // tamanho máximo do pool de inimigos
+export const ENEMY_RESPAWN_DELAY = 2500;    // delay para respawn após morte (ms)
+
 // ── Profundidade / Ordenação ───────────────────────────────
 // depth = Y do chão do sprite, garantindo que objetos mais
 // "perto da câmera" (Y maior) fiquem na frente.

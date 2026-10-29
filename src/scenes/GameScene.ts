@@ -30,6 +30,7 @@ import {
   SCREEN_SHAKE_INTENSITY,
   SCREEN_SHAKE_DURATION,
   LANE_TOLERANCE,
+  ENEMY_RESPAWN_DELAY,
   EVENTS,
 } from '../config/constants';
 
@@ -43,6 +44,9 @@ export class GameScene extends Phaser.Scene {
   // ── Parallax ───────────────────────────────────────────
   private _bgFar!: Phaser.GameObjects.TileSprite;
   private _bgNear!: Phaser.GameObjects.TileSprite;
+
+  // ── Partículas de morte ────────────────────────────────
+  private _deathParticles!: Phaser.GameObjects.Particles.ParticleEmitter;
 
   // ── Hitstop ────────────────────────────────────────────
   private _hitstopFrames: number = 0;
@@ -79,9 +83,16 @@ export class GameScene extends Phaser.Scene {
     const startY = (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2;
     this._player = new Player(this, startX, startY, this._playerState);
 
-    // ── Cria inimigos ────────────────────────────────────
-    this._enemyGroup = this.physics.add.group({ classType: Enemy, runChildUpdate: true });
+    // ── Cria inimigos (Object Pool) ──────────────────────
+    this._enemyGroup = this.physics.add.group({
+      classType: Enemy,
+      runChildUpdate: true,
+      maxSize: 10,
+    });
     this._spawnEnemies();
+
+    // ── Sistema de partículas de morte ───────────────────
+    this._createDeathParticles();
 
     // ── Configura overlaps de combate ────────────────────
     this._setupCombatOverlaps();
@@ -125,9 +136,35 @@ export class GameScene extends Phaser.Scene {
     ];
 
     for (const pos of positions) {
-      const enemy = new Enemy(this, pos.x, pos.y, this._playerState);
-      this._enemies.push(enemy);
+      this._spawnEnemyAt(pos.x, pos.y);
+    }
+  }
+
+  /**
+   * Spawna um inimigo na posição especificada usando Object Pooling.
+   */
+  private _spawnEnemyAt(x: number, y: number): void {
+    // Tenta obter um inimigo do pool
+    let enemy = this._enemyGroup.get(x, y) as Enemy;
+
+    if (enemy) {
+      // Se o inimigo já existe no pool, reseta ele
+      if (enemy.resetEnemy) {
+        enemy.resetEnemy(x, y);
+      }
+      // Define o jogador para a IA
+      enemy.setPlayer(this._player);
+      
+      // Adiciona ao array se não estiver lá
+      if (!this._enemies.includes(enemy)) {
+        this._enemies.push(enemy);
+      }
+    } else {
+      // Se o pool está cheio, cria um novo inimigo
+      enemy = new Enemy(this, x, y, this._playerState);
+      enemy.setPlayer(this._player);
       this._enemyGroup.add(enemy);
+      this._enemies.push(enemy);
     }
   }
 
@@ -247,13 +284,51 @@ export class GameScene extends Phaser.Scene {
     // this.sound.play(name);
   }
 
-  private _onEnemyDied(_enemy: Enemy): void {
+  private _onEnemyDied(_enemy: Enemy, x: number, y: number): void {
+    // Emite partículas de morte
+    if (this._deathParticles) {
+      this._deathParticles.setPosition(x, y);
+      this._deathParticles.explode(10);
+    }
+
     // Reseta combo se não houver mais inimigos vivos
-    const aliveEnemies = this._enemies.filter(e => e.fighterState !== 'dead');
+    const aliveEnemies = this._enemies.filter(e => e.isActive && e.fighterState !== FighterState.Dead);
     if (aliveEnemies.length === 0) {
       this._comboCount = 0;
       this.game.events.emit(EVENTS.COMBO_CHANGED, 0);
     }
+
+    // Ciclo de respawn (demonstra Object Pooling)
+    this.time.delayedCall(ENEMY_RESPAWN_DELAY, () => {
+      // Spawna em posição aleatória dentro da zona de walk
+      const randomX = Phaser.Math.Between(200, WORLD_WIDTH - 200);
+      const randomY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
+      this._spawnEnemyAt(randomX, randomY);
+    });
+  }
+
+  /**
+   * Cria o sistema de partículas de morte.
+   */
+  private _createDeathParticles(): void {
+    // Cria a textura da partícula (um pequeno quadrado vermelho)
+    const particleGfx = this.add.graphics();
+    particleGfx.fillStyle(0xff2222, 1);
+    particleGfx.fillRect(0, 0, 4, 4);
+    particleGfx.generateTexture('death_particle', 4, 4);
+    particleGfx.destroy();
+
+    // Cria o emitter de partículas
+    this._deathParticles = this.add.particles(0, 0, 'death_particle', {
+      speed: { min: 50, max: 150 },
+      angle: { min: 0, max: 360 },
+      scale: { start: 1, end: 0 },
+      alpha: { start: 1, end: 0 },
+      lifespan: 500,
+      gravityY: 300,
+      emitting: false,
+    });
+    this._deathParticles.setDepth(1000);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -318,7 +393,9 @@ export class GameScene extends Phaser.Scene {
     // Atualiza entidades
     this._player.update(time, delta);
     for (const enemy of this._enemies) {
-      enemy.update(time, delta);
+      if (enemy.isActive) {
+        enemy.update(time, delta);
+      }
     }
 
     // Combo timer
@@ -353,11 +430,11 @@ export class GameScene extends Phaser.Scene {
       this._debugMode = !this._debugMode;
     }
 
-    // G: toggle aggressive nos inimigos
+    // G: spawna um novo inimigo em posição aleatória (para testar pooling)
     if (Phaser.Input.Keyboard.JustDown(this._gKey)) {
-      for (const enemy of this._enemies) {
-        enemy.setAggressive(!enemy.aggressive);
-      }
+      const randomX = Phaser.Math.Between(200, WORLD_WIDTH - 200);
+      const randomY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
+      this._spawnEnemyAt(randomX, randomY);
     }
   }
 
@@ -389,7 +466,7 @@ export class GameScene extends Phaser.Scene {
 
     // Hitboxes e hurtboxes dos inimigos
     for (const enemy of this._enemies) {
-      if (enemy.fighterState === FighterState.Dead) continue;
+      if (!enemy.isActive || enemy.fighterState === FighterState.Dead) continue;
 
       // Hitbox
       const enemyHitbox = enemy.getHitboxZone();
@@ -423,7 +500,9 @@ export class GameScene extends Phaser.Scene {
   private _onPostUpdate = (): void => {
     this._player.postPhysicsUpdate();
     for (const enemy of this._enemies) {
-      enemy.postPhysicsUpdate();
+      if (enemy.isActive) {
+        enemy.postPhysicsUpdate();
+      }
     }
   };
 
