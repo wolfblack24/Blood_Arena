@@ -27,8 +27,7 @@ import {
   ENEMY_PATROL_CHANGE_TIME,
   ENEMY_LANE_ALIGN_TOLERANCE,
   WORLD_WIDTH,
-  WALK_ZONE_TOP,
-  WALK_ZONE_BOTTOM,
+  LANE_TOLERANCE,
   EVENTS,
 } from '../config/constants';
 
@@ -83,6 +82,9 @@ export class Enemy extends Fighter {
   private _patrolChangeTime: number = 0;
   private _stateEndTime: number = 0;
 
+  // ── Timers de ataque ───────────────────────────────────
+  private _attackTimers: Phaser.Time.TimerEvent[] = [];
+
   // ── Referência ao jogador ──────────────────────────────
   private _player?: Fighter;
 
@@ -91,6 +93,9 @@ export class Enemy extends Fighter {
 
   // ── Flag para Object Pooling ───────────────────────────
   private _isActive: boolean = true;
+
+  // ── Flag para evitar overlaps duplicados ───────────────
+  private _overlapRegistered: boolean = false;
 
   constructor(
     scene: Phaser.Scene,
@@ -149,10 +154,14 @@ export class Enemy extends Fighter {
     // Reset HP
     this._hp = this._hpMax;
 
+    // Cancela qualquer ataque em andamento
+    this._cancelAttackTimers();
+
     // Reset estado
     this._aiState = EnemyAIState.IDLE;
     this._fighterState = FighterState.Idle;
     this._isActive = true;
+    this.setActive(true);
 
     // Reset posição
     this.setPosition(x, y);
@@ -163,9 +172,28 @@ export class Enemy extends Fighter {
     body.enable = true;
     body.setVelocity(0, 0);
 
+    // Reset eixo Z
+    this._jumpHeight = 0;
+    this._jumpVelocity = 0;
+    this._isGrounded = true;
+    this._appliedJumpOffset = 0;
+
     // Torna visível
     this.setVisible(true);
     this.setAlpha(1);
+
+    // Mostra barra de vida e sombra
+    this._hpBarBg.setVisible(true);
+    this._hpBar.setVisible(true);
+    this._shadow.setVisible(true);
+
+    // Reset hitbox
+    this._currentAttack = undefined;
+    this._hitboxBody.enable = false;
+
+    // Reset invulnerabilidade
+    this._invulnerableUntil = 0;
+    this._stopBlink();
 
     // Reset timers
     const now = this.scene.time.now;
@@ -173,9 +201,11 @@ export class Enemy extends Fighter {
     this._patrolChangeTime = now + ENEMY_PATROL_CHANGE_TIME;
     this._patrolDirection = 1;
 
+    // Atualiza animação
+    this._updateAnimationFromState();
+
     // Atualiza barra de vida
     this._updateHPBar();
-    this._updateHPBarPosition();
   }
 
   /**
@@ -186,10 +216,31 @@ export class Enemy extends Fighter {
   }
 
   /**
+   * Define o PlayerState para somar pontos ao matar.
+   */
+  setPlayerState(playerState: { addScore: (points: number) => void }): void {
+    this._playerState = playerState;
+  }
+
+  /**
    * Verifica se o inimigo está ativo (para pooling).
    */
   get isActive(): boolean {
     return this._isActive;
+  }
+
+  /**
+   * Verifica se o overlap já foi registrado (para evitar duplicatas).
+   */
+  get overlapRegistered(): boolean {
+    return this._overlapRegistered;
+  }
+
+  /**
+   * Marca que o overlap foi registrado.
+   */
+  markOverlapRegistered(): void {
+    this._overlapRegistered = true;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -221,6 +272,8 @@ export class Enemy extends Fighter {
   postPhysicsUpdate(): void {
     if (!this._isActive) return;
 
+    // Desfaz o offset visual do frame anterior
+    this.undoJumpVisualOffset();
     this.clampToWalkZone();
     this.applyJumpVisualOffset();
     this._updateHitboxPosition();
@@ -235,10 +288,9 @@ export class Enemy extends Fighter {
     // DEAD: não faz nada
     if (this._aiState === EnemyAIState.DEAD) return;
 
-    // HURT: aguarda timer de stun
+    // HURT: aplica atrito no chão, não zera velocidade
     if (this._aiState === EnemyAIState.HURT) {
-      const body = this.body as Phaser.Physics.Arcade.Body;
-      body.setVelocity(0, 0);
+      this._applyGroundFriction(delta);
       return;
     }
 
@@ -253,22 +305,23 @@ export class Enemy extends Fighter {
       return;
     }
 
-    // Calcula distância até o jogador
-    const distance = Phaser.Math.Distance.Between(
-      this.x, this.y,
-      this._player.x, this._player.y
-    );
+    // Usa groundY do jogador (posição real do chão, sem offset visual)
+    const playerGroundY = this._player.groundY;
+    const dx = this._player.x - this.x;
+    const dy = playerGroundY - this.groundY;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
 
-    // Transições de estado baseadas na distância
-    if (distance <= this._attackRadius) {
-      // Dentro do raio de ataque
+    // Transições de estado baseadas em dx/dy separados
+    if (absDx <= this._attackRadius && absDy <= LANE_TOLERANCE) {
+      // Dentro do raio de ataque E alinhado na faixa
       if (this.scene.time.now >= this._nextAttackTime) {
         this._changeAIState(EnemyAIState.ATTACK);
       } else {
         this._changeAIState(EnemyAIState.IDLE);
       }
-    } else if (distance <= this._aggroRadius) {
-      // Dentro do raio de aggro, mas fora do raio de ataque
+    } else if (absDx <= this._aggroRadius) {
+      // Dentro do raio de aggro (mas não alinhado ou fora do raio de ataque)
       this._changeAIState(EnemyAIState.CHASE);
     } else {
       // Fora do raio de aggro
@@ -342,8 +395,9 @@ export class Enemy extends Fighter {
     if (!this._player) return;
 
     const body = this.body as Phaser.Physics.Arcade.Body;
+    const playerGroundY = this._player.groundY;
     const dx = this._player.x - this.x;
-    const dy = this._player.y - this.y;
+    const dy = playerGroundY - this.groundY;
 
     // Atualiza facing para olhar para o jogador
     this.setFacing(dx > 0);
@@ -385,33 +439,67 @@ export class Enemy extends Fighter {
   // ═══════════════════════════════════════════════════════
 
   private _startAttack(): void {
+    // Cancela timers anteriores
+    this._cancelAttackTimers();
+
     this._currentAttack = ENEMY_ATTACK;
     this._attackStartTime = this.scene.time.now;
     this._aiState = EnemyAIState.ATTACK;
-    this.changeState(FighterState.Attack);
+    this.changeState(FighterState.Attack, true);
 
     const totalTime = ENEMY_ATTACK.startup + ENEMY_ATTACK.active + ENEMY_ATTACK.recovery;
 
     // Ativa hitbox
-    this.scene.time.delayedCall(ENEMY_ATTACK.startup, () => {
-      if (this._aiState === EnemyAIState.ATTACK) {
+    const t1 = this.scene.time.delayedCall(ENEMY_ATTACK.startup, () => {
+      if (this._aiState === EnemyAIState.ATTACK && this._isActive) {
         this._hitboxBody.enable = true;
         this._hitboxBody.setSize(ENEMY_ATTACK.hitboxWidth, ENEMY_ATTACK.hitboxHeight);
       }
     });
+    this._attackTimers.push(t1);
 
     // Desativa hitbox
-    this.scene.time.delayedCall(ENEMY_ATTACK.startup + ENEMY_ATTACK.active, () => {
+    const t2 = this.scene.time.delayedCall(ENEMY_ATTACK.startup + ENEMY_ATTACK.active, () => {
       this._hitboxBody.enable = false;
     });
+    this._attackTimers.push(t2);
 
     // Fim do ataque
-    this.scene.time.delayedCall(totalTime, () => {
+    const t3 = this.scene.time.delayedCall(totalTime, () => {
       this._endAttack();
     });
+    this._attackTimers.push(t3);
+  }
+
+  /**
+   * Cancela todos os timers de ataque agendados.
+   */
+  private _cancelAttackTimers(): void {
+    for (const timer of this._attackTimers) {
+      if (timer && !timer.hasDispatched) {
+        timer.remove(false);
+      }
+    }
+    this._attackTimers = [];
+  }
+
+  /**
+   * Cancela o ataque atual (chamado ao levar dano).
+   */
+  private _cancelAttack(): void {
+    this._cancelAttackTimers();
+    this._currentAttack = undefined;
+    this._hitboxBody.enable = false;
   }
 
   private _endAttack(): void {
+    // Só muda o estado se ainda estiver em ATTACK
+    if (this._aiState !== EnemyAIState.ATTACK) {
+      this._currentAttack = undefined;
+      this._hitboxBody.enable = false;
+      return;
+    }
+
     this._currentAttack = undefined;
     this._hitboxBody.enable = false;
     this._nextAttackTime = this.scene.time.now + this._attackCooldown;
@@ -422,7 +510,7 @@ export class Enemy extends Fighter {
   private _updateHitboxPosition(): void {
     if (!this._hitboxBody.enable || !this._currentAttack) return;
     const offsetX = this._facingRight ? 15 : -15;
-    this._hitboxZone.setPosition(this.x + offsetX, this.y - 10);
+    this._hitboxZone.setPosition(this.x + offsetX, this.groundY - 10);
   }
 
   /**
@@ -451,6 +539,9 @@ export class Enemy extends Fighter {
     if (this._fighterState === FighterState.Dead) return false;
     if (!this._isActive) return false;
 
+    // Cancela o ataque atual antes de mudar o estado
+    this._cancelAttack();
+
     const died = this.takeDamage(amount, knockbackX, knockdown);
 
     // Emite evento
@@ -474,6 +565,9 @@ export class Enemy extends Fighter {
   }
 
   private _handleDeath(): void {
+    // Cancela qualquer ataque em andamento
+    this._cancelAttack();
+
     this._aiState = EnemyAIState.DEAD;
     this.changeState(FighterState.Dead);
     this._hitboxBody.enable = false;
@@ -488,10 +582,16 @@ export class Enemy extends Fighter {
     }
 
     // Emite evento com posição para partículas
-    this.scene.game.events.emit(EVENTS.ENEMY_DIED, this, this.x, this.y);
+    this.scene.game.events.emit(EVENTS.ENEMY_DIED, this, this.x, this.groundY);
 
     // Marca como inativo para pooling
     this._isActive = false;
+    this.setActive(false);
+
+    // Esconde barra de vida e sombra explicitamente
+    this._hpBarBg.setVisible(false);
+    this._hpBar.setVisible(false);
+    this._shadow.setVisible(false);
 
     // Torna invisível após animação
     this.scene.time.delayedCall(500, () => {
@@ -523,14 +623,10 @@ export class Enemy extends Fighter {
   }
 
   private _updateHPBarPosition(): void {
-    this._hpBarBg.setPosition(this.x, this.y - 38 - this._jumpHeight);
-    this._hpBar.setPosition(this.x, this.y - 38 - this._jumpHeight);
-    this._hpBarBg.setDepth(this.y + 1);
-    this._hpBar.setDepth(this.y + 1);
-
-    // Esconde barra se estiver invisível
-    this._hpBarBg.setVisible(this.visible);
-    this._hpBar.setVisible(this.visible);
+    this._hpBarBg.setPosition(this.x, this.y - 38);
+    this._hpBar.setPosition(this.x, this.y - 38);
+    this._hpBarBg.setDepth(this.groundY + 1);
+    this._hpBar.setDepth(this.groundY + 1);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -539,6 +635,7 @@ export class Enemy extends Fighter {
 
   cleanup(): void {
     super.cleanup();
+    this._cancelAttackTimers();
     this._hpBarBg.destroy();
     this._hpBar.destroy();
     this._hitboxZone.destroy();

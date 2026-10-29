@@ -19,13 +19,13 @@ import { AttackData, PLAYER_ATTACKS, PLAYER_AIR_ATTACK } from '../config/attacks
 import {
   PLAYER_SPEED,
   PLAYER_JUMP_FORCE,
-  WALK_ZONE_TOP,
-  WALK_ZONE_BOTTOM,
   STAMINA_REGEN_RATE,
   COMBO_WINDOW,
+  INPUT_BUFFER,
   KNOCKDOWN_DURATION,
   HURT_STUN_DURATION,
   INVULNERABILITY_DURATION,
+  LANE_TOLERANCE,
   EVENTS,
 } from '../config/constants';
 
@@ -55,8 +55,13 @@ export class Player extends Fighter {
   private _hitTargets: Set<Fighter> = new Set();
   private _canStartNewCombo: boolean = true;
 
+  // ── Buffer de input ────────────────────────────────────
+  private _attackBufferUntil: number = 0;
+
+  // ── Timers de ataque ───────────────────────────────────
+  private _attackTimers: Phaser.Time.TimerEvent[] = [];
+
   // ── Timers de estado ───────────────────────────────────
-  private _stateTimer: number = 0;
   private _stateEndTime: number = 0;
 
   constructor(
@@ -113,6 +118,11 @@ export class Player extends Fighter {
     // Atualiza timers de estado
     this._updateStateTimers();
 
+    // Aplica atrito no chão durante Hurt/Knockdown
+    if (this._fighterState === FighterState.Hurt || this._fighterState === FighterState.Knockdown) {
+      this._applyGroundFriction(delta);
+    }
+
     // Processa input baseado no estado
     this._processInput(delta);
 
@@ -130,6 +140,8 @@ export class Player extends Fighter {
    * Chamado no postupdate da GameScene.
    */
   postPhysicsUpdate(): void {
+    // Desfaz o offset visual do frame anterior
+    this.undoJumpVisualOffset();
     this.clampToWalkZone();
     this.applyJumpVisualOffset();
     this._updateHitboxPosition();
@@ -139,12 +151,17 @@ export class Player extends Fighter {
   // INPUT
   // ═══════════════════════════════════════════════════════
 
-  private _processInput(delta: number): void {
+  private _processInput(_delta: number): void {
     if (this._fighterState === FighterState.Dead) return;
 
     // Resetar a permissão de novo combo se a tecla de ataque for solta
     if (!this._attackKey.isDown) {
       this._canStartNewCombo = true;
+    }
+
+    // Captura buffer de input para ataque
+    if (Phaser.Input.Keyboard.JustDown(this._attackKey)) {
+      this._attackBufferUntil = this.scene.time.now + INPUT_BUFFER;
     }
 
     // Processar ataque primeiro para permitir combos durante a animação
@@ -217,16 +234,22 @@ export class Player extends Fighter {
   private _handleAttack(): void {
     const now = this.scene.time.now;
 
-    // Verifica se a tecla de ataque foi pressionada
-    if (!Phaser.Input.Keyboard.JustDown(this._attackKey)) return;
+    // Não pode atacar em Hurt, Knockdown ou Dead
+    if (this._fighterState === FighterState.Hurt ||
+        this._fighterState === FighterState.Knockdown ||
+        this._fighterState === FighterState.Dead) {
+      return;
+    }
 
     // Se já está atacando, verifica se pode encadear combo
     if (this._fighterState === FighterState.Attack && this._currentAttack) {
       const totalTime = this._currentAttack.startup + this._currentAttack.active + this._currentAttack.recovery;
       const elapsed = now - this._attackStartTime;
-      
+
       // Só permite encadear se estiver na janela de combo no final da animação
       if (elapsed >= totalTime - COMBO_WINDOW && elapsed < totalTime) {
+        // Avança o combo com módulo (3º golpe volta ao 1º)
+        this._comboIndex = (this._comboIndex + 1) % PLAYER_ATTACKS.length;
         this._startAttack();
       }
       // Se não está na janela, ignora o input (evita spam)
@@ -237,9 +260,16 @@ export class Player extends Fighter {
     // (evita loop infinito quando a tecla está segurada)
     if (!this._canStartNewCombo) return;
 
+    // Verifica buffer de input
+    if (now > this._attackBufferUntil) return;
+
+    // Limpa o buffer
+    this._attackBufferUntil = 0;
+
     // Verifica janela de combo para incrementar o índice
     if (now - this._lastAttackEndTime < COMBO_WINDOW) {
-      this._comboIndex = Math.min(this._comboIndex + 1, PLAYER_ATTACKS.length - 1);
+      // Avança o combo com módulo (3º golpe volta ao 1º)
+      this._comboIndex = (this._comboIndex + 1) % PLAYER_ATTACKS.length;
     } else {
       this._comboIndex = 0;
     }
@@ -253,6 +283,9 @@ export class Player extends Fighter {
     // Bloqueia novo combo até que a tecla seja solta
     this._canStartNewCombo = false;
 
+    // Cancela timers anteriores (encadeamento de combo)
+    this._cancelAttackTimers();
+
     // Escolhe o ataque
     let attackData: AttackData;
     if (!this._isGrounded) {
@@ -265,24 +298,55 @@ export class Player extends Fighter {
     this._attackStartTime = now;
     this._hitTargets.clear();
 
-    // Muda estado
-    this.changeState(FighterState.Attack);
+    // Muda estado (forceRestart=true para encadeamento de combo)
+    this.changeState(FighterState.Attack, true);
+
+    // Deslize: zera velocidade no chão, mantém momentum no ar
+    if (this._isGrounded) {
+      const body = this.body as Phaser.Physics.Arcade.Body;
+      body.setVelocity(0, 0);
+    }
 
     // Agenda ativação da hitbox
-    this.scene.time.delayedCall(attackData.startup, () => {
+    const t1 = this.scene.time.delayedCall(attackData.startup, () => {
       this._activateHitbox();
     });
+    this._attackTimers.push(t1);
 
     // Agenda desativação da hitbox
-    this.scene.time.delayedCall(attackData.startup + attackData.active, () => {
+    const t2 = this.scene.time.delayedCall(attackData.startup + attackData.active, () => {
       this._deactivateHitbox();
     });
+    this._attackTimers.push(t2);
 
     // Agenda fim do ataque
     const totalTime = attackData.startup + attackData.active + attackData.recovery;
-    this.scene.time.delayedCall(totalTime, () => {
+    const t3 = this.scene.time.delayedCall(totalTime, () => {
       this._endAttack();
     });
+    this._attackTimers.push(t3);
+  }
+
+  /**
+   * Cancela todos os timers de ataque agendados.
+   */
+  private _cancelAttackTimers(): void {
+    for (const timer of this._attackTimers) {
+      if (timer && !timer.hasDispatched) {
+        timer.remove(false);
+      }
+    }
+    this._attackTimers = [];
+  }
+
+  /**
+   * Cancela o ataque atual (chamado ao levar dano, morrer ou respawnar).
+   */
+  private _cancelAttack(): void {
+    this._cancelAttackTimers();
+    this._currentAttack = undefined;
+    this._deactivateHitbox();
+    this._hitTargets.clear();
   }
 
   private _activateHitbox(): void {
@@ -296,6 +360,14 @@ export class Player extends Fighter {
   }
 
   private _endAttack(): void {
+    // Só muda o estado se ainda estiver em Attack
+    // (pode ter sido interrompido por dano)
+    if (this._fighterState !== FighterState.Attack) {
+      this._currentAttack = undefined;
+      this._deactivateHitbox();
+      return;
+    }
+
     this._currentAttack = undefined;
     this._lastAttackEndTime = this.scene.time.now;
     this._deactivateHitbox();
@@ -313,13 +385,14 @@ export class Player extends Fighter {
   private _updateHitboxPosition(): void {
     if (!this._hitboxBody.enable || !this._currentAttack) return;
 
-    // Posiciona a hitbox na frente do jogador
+    // Posiciona a hitbox na frente do jogador, usando groundY (sem offset visual)
     const offsetX = this._facingRight ? 15 : -15;
-    this._hitboxZone.setPosition(this.x + offsetX, this.y - 10);
+    this._hitboxZone.setPosition(this.groundX + offsetX, this.groundY - 10);
   }
 
   /**
    * Verifica se um alvo pode ser atingido por este ataque.
+   * Usa groundY para validação de faixa (posição real do chão).
    */
   canHitTarget(target: Fighter): boolean {
     if (!this._currentAttack) return false;
@@ -327,10 +400,10 @@ export class Player extends Fighter {
     if (target.fighterState === FighterState.Dead || target.fighterState === FighterState.Knockdown) return false;
     if (target.isInvulnerable()) return false;
 
-    // Valida profundidade
-    const laneDiff = Math.abs(this.y - target.y);
+    // Valida profundidade usando groundY (posição real do chão)
+    const laneDiff = Math.abs(this.groundY - target.groundY);
     const zDiff = Math.abs(this._jumpHeight - target.jumpHeight);
-    if (laneDiff > 15 || zDiff > this._currentAttack.zTolerance) return false;
+    if (laneDiff > LANE_TOLERANCE || zDiff > this._currentAttack.zTolerance) return false;
 
     return true;
   }
@@ -367,6 +440,9 @@ export class Player extends Fighter {
     if (this.isInvulnerable()) return false;
     if (this._fighterState === FighterState.Dead) return false;
 
+    // Cancela o ataque atual antes de mudar o estado
+    this._cancelAttack();
+
     // Aplica dano no PlayerState
     const died = this._playerState.takeDamage(amount);
 
@@ -396,6 +472,9 @@ export class Player extends Fighter {
   }
 
   private _handleDeath(): void {
+    // Cancela qualquer ataque em andamento
+    this._cancelAttack();
+
     this.changeState(FighterState.Dead);
     this._stopBlink();
 
@@ -409,6 +488,9 @@ export class Player extends Fighter {
   }
 
   private _respawn(): void {
+    // Cancela qualquer ataque em andamento
+    this._cancelAttack();
+
     this._playerState.respawn();
     this._hp = this._hpMax;
     this.changeState(FighterState.Idle);
@@ -450,4 +532,9 @@ export class Player extends Fighter {
   // ═══════════════════════════════════════════════════════
 
   get playerState(): PlayerState { return this._playerState; }
+
+  /**
+   * Retorna o X do chão do lutador (sem offset visual).
+   */
+  get groundX(): number { return this.x; }
 }

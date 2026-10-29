@@ -36,6 +36,7 @@ export const HITSTOP_FRAMES = 3;       // frames de hitstop ao acertar
 export const SCREEN_SHAKE_INTENSITY = 3; // intensidade do shake
 export const SCREEN_SHAKE_DURATION = 100; // duração do shake (ms)
 export const KNOCKBACK_FORCE = 150;    // força do knockback
+export const KNOCKBACK_FRICTION = 600; // atrito para desacelerar knockback (px/s²)
 export const KNOCKDOWN_DURATION = 700; // duração do knockdown (ms)
 export const HURT_STUN_DURATION = 250; // duração do stun ao levar dano (ms)
 export const INVULNERABILITY_DURATION = 1200; // i-frames após dano (ms)

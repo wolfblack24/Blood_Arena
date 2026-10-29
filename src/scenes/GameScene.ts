@@ -14,7 +14,7 @@
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
-import { Fighter, FighterState } from '../entities/Fighter';
+import { FighterState } from '../entities/Fighter';
 import { PlayerState } from '../state/PlayerState';
 import {
   GAME_WIDTH,
@@ -84,9 +84,10 @@ export class GameScene extends Phaser.Scene {
     this._player = new Player(this, startX, startY, this._playerState);
 
     // ── Cria inimigos (Object Pool) ──────────────────────
+    // runChildUpdate: false porque a GameScene já chama update manualmente
     this._enemyGroup = this.physics.add.group({
       classType: Enemy,
-      runChildUpdate: true,
+      runChildUpdate: false,
       maxSize: 10,
     });
     this._spawnEnemies();
@@ -144,27 +145,57 @@ export class GameScene extends Phaser.Scene {
    * Spawna um inimigo na posição especificada usando Object Pooling.
    */
   private _spawnEnemyAt(x: number, y: number): void {
-    // Tenta obter um inimigo do pool
-    let enemy = this._enemyGroup.get(x, y) as Enemy;
+    // Primeiro, tenta encontrar um inimigo inativo no pool para reutilizar
+    let enemy = this._findInactiveEnemy();
 
     if (enemy) {
-      // Se o inimigo já existe no pool, reseta ele
-      if (enemy.resetEnemy) {
-        enemy.resetEnemy(x, y);
-      }
-      // Define o jogador para a IA
-      enemy.setPlayer(this._player);
-      
-      // Adiciona ao array se não estiver lá
-      if (!this._enemies.includes(enemy)) {
-        this._enemies.push(enemy);
-      }
-    } else {
-      // Se o pool está cheio, cria um novo inimigo
+      // Reutiliza o inimigo inativo
+      enemy.resetEnemy(x, y);
+    } else if (this._enemies.length < 10) {
+      // Se não há inativos e o pool não está cheio, cria um novo
       enemy = new Enemy(this, x, y, this._playerState);
-      enemy.setPlayer(this._player);
       this._enemyGroup.add(enemy);
       this._enemies.push(enemy);
+    } else {
+      // Pool cheio e nenhum inativo: ignora o spawn
+      return;
+    }
+
+    // Injeta dependências
+    this._initEnemy(enemy);
+  }
+
+  /**
+   * Encontra um inimigo inativo no pool para reutilizar.
+   */
+  private _findInactiveEnemy(): Enemy | null {
+    for (const enemy of this._enemies) {
+      if (!enemy.isActive) {
+        return enemy;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Inicializa um inimigo com as dependências necessárias.
+   * Registra o overlap uma única vez por instância.
+   */
+  private _initEnemy(enemy: Enemy): void {
+    // Injeta o jogador e o playerState
+    enemy.setPlayer(this._player);
+    enemy.setPlayerState(this._playerState);
+
+    // Registra o overlap hitbox-do-inimigo → jogador UMA VEZ por instância
+    if (!enemy.overlapRegistered) {
+      this.physics.add.overlap(
+        enemy.getHitboxZone(),
+        this._player,
+        this._onEnemyHitPlayer as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
+        undefined,
+        this
+      );
+      enemy.markOverlapRegistered();
     }
   }
 
@@ -173,7 +204,8 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _setupCombatOverlaps(): void {
-    // Hitbox do jogador vs inimigos
+    // Hitbox do jogador vs grupo de inimigos
+    // (overlap registrado uma vez para o grupo todo)
     this.physics.add.overlap(
       this._player.getHitboxZone(),
       this._enemyGroup,
@@ -182,16 +214,9 @@ export class GameScene extends Phaser.Scene {
       this
     );
 
-    // Hitbox dos inimigos vs jogador
-    for (const enemy of this._enemies) {
-      this.physics.add.overlap(
-        enemy.getHitboxZone(),
-        this._player,
-        this._onEnemyHitPlayer as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
-        undefined,
-        this
-      );
-    }
+    // Hitbox dos inimigos vs jogador é registrada individualmente em _initEnemy
+    // para garantir que cada instância tenha seu overlap registrado UMA VEZ,
+    // inclusive quando reutilizada pelo pool.
   }
 
   private _onPlayerHitEnemy(playerHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
@@ -239,8 +264,8 @@ export class GameScene extends Phaser.Scene {
     if (this._player.isInvulnerable()) return;
     if (this._player.fighterState === FighterState.Dead || this._player.fighterState === FighterState.Knockdown) return;
 
-    // Valida profundidade
-    const laneDiff = Math.abs(this._player.y - enemy.y);
+    // Valida profundidade usando groundY (posição real do chão)
+    const laneDiff = Math.abs(this._player.groundY - enemy.groundY);
     const zDiff = Math.abs(this._player.jumpHeight - enemy.jumpHeight);
     if (laneDiff > LANE_TOLERANCE || zDiff > attack.zTolerance) return;
 

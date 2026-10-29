@@ -9,6 +9,7 @@
  * - HP próprio da entidade
  * - Máquina de estados
  * - Utilidades de dano/knockback
+ * - Atrito de chão para knockback
  *
  * O Player usa PlayerState como fonte de verdade de HP/vidas/score.
  * O Enemy usa o HP próprio desta classe.
@@ -21,6 +22,7 @@ import {
   WALK_ZONE_TOP,
   WALK_ZONE_BOTTOM,
   WORLD_WIDTH,
+  KNOCKBACK_FRICTION,
 } from '../config/constants';
 
 /**
@@ -48,6 +50,10 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
   protected _jumpHeight: number = 0;        // altura atual (0 = no chão)
   protected _jumpVelocity: number = 0;      // velocidade vertical do pulo
   protected _isGrounded: boolean = true;
+
+  // ── Offset visual do pulo aplicado ─────────────────────
+  // Rastreia o deslocamento aplicado ao sprite para desfazer no próximo frame
+  protected _appliedJumpOffset: number = 0;
 
   // ── HP próprio da entidade ─────────────────────────────
   protected _hp: number;
@@ -114,9 +120,11 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
     if (from === FighterState.Hurt) return true;
 
     // Pode transicionar de attack para idle/walk/jump (fim do ataque) ou hurt/knockdown/dead (interrupção)
+    // Também permite attack → attack para encadeamento de combo
     if (from === FighterState.Attack) {
       return to === FighterState.Idle || to === FighterState.Walk || to === FighterState.Jump ||
-             to === FighterState.Hurt || to === FighterState.Knockdown || to === FighterState.Dead;
+             to === FighterState.Hurt || to === FighterState.Knockdown || to === FighterState.Dead ||
+             to === FighterState.Attack;
     }
 
     // Transições normais
@@ -125,9 +133,25 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
 
   /**
    * Muda o estado do lutador.
+   * @param forceRestart Se true e o estado for o mesmo, reinicia a animação
    */
-  changeState(newState: FighterState): void {
+  changeState(newState: FighterState, forceRestart: boolean = false): void {
     if (!this.canTransition(this._fighterState, newState)) return;
+
+    // Se for o mesmo estado e forceRestart, reinicia a animação
+    if (this._fighterState === newState && forceRestart) {
+      const animMap: Record<FighterState, AnimationName> = {
+        [FighterState.Idle]: 'idle',
+        [FighterState.Walk]: 'run',
+        [FighterState.Jump]: 'jump',
+        [FighterState.Attack]: 'attack',
+        [FighterState.Hurt]: 'hurt',
+        [FighterState.Knockdown]: 'hurt',
+        [FighterState.Dead]: 'hurt',
+      };
+      this.play(animMap[newState], false);
+      return;
+    }
 
     this._fighterState = newState;
 
@@ -173,6 +197,8 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
    * Atualiza o eixo Z (altura do pulo).
    */
   protected _updateJumpAxis(delta: number): void {
+    const wasGrounded = this._isGrounded;
+
     if (this._isGrounded) {
       this._jumpHeight = 0;
       this._jumpVelocity = 0;
@@ -191,12 +217,28 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
       this._jumpHeight = 0;
       this._jumpVelocity = 0;
       this._isGrounded = true;
+
+      // Se estava pulando, volta ao Idle ao pousar
+      if (!wasGrounded && this._fighterState === FighterState.Jump) {
+        this.changeState(FighterState.Idle);
+      }
     }
   }
 
   // ═══════════════════════════════════════════════════════
   // VISUAIS (sprite + sombra)
   // ═══════════════════════════════════════════════════════
+
+  /**
+   * Desfaz o offset visual do pulo aplicado no frame anterior.
+   * Deve ser chamado no início do postPhysicsUpdate.
+   */
+  undoJumpVisualOffset(): void {
+    if (this._appliedJumpOffset !== 0) {
+      this.y += this._appliedJumpOffset;
+      this._appliedJumpOffset = 0;
+    }
+  }
 
   /**
    * Aplica o offset visual do pulo.
@@ -214,6 +256,9 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
     // Sprite deslocado para cima pelo jumpHeight (visualmente)
     if (this._jumpHeight > 0) {
       this.y = this.y - this._jumpHeight;
+      this._appliedJumpOffset = this._jumpHeight;
+    } else {
+      this._appliedJumpOffset = 0;
     }
   }
 
@@ -254,8 +299,40 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
    * Atualiza a profundidade (depth = Y do chão).
    */
   protected _updateDepth(): void {
-    this.setDepth(this.y);
-    this._shadow.setDepth(this.y - 0.1);
+    this.setDepth(this.groundY);
+    this._shadow.setDepth(this.groundY - 0.1);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // ATRITO DE CHÃO (para knockback)
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Aplica atrito no chão, reduzindo a velocidade linearmente até 0
+   * sem inverter o sinal. Usado para desacelerar knockback.
+   */
+  protected _applyGroundFriction(delta: number): void {
+    if (!this._isGrounded) return;
+
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    if (!body) return;
+
+    const dt = Math.min(delta / 1000, 0.05);
+    const friction = KNOCKBACK_FRICTION * dt;
+
+    // Atrito no eixo X
+    if (body.velocity.x > 0) {
+      body.setVelocityX(Math.max(0, body.velocity.x - friction));
+    } else if (body.velocity.x < 0) {
+      body.setVelocityX(Math.min(0, body.velocity.x + friction));
+    }
+
+    // Atrito no eixo Y
+    if (body.velocity.y > 0) {
+      body.setVelocityY(Math.max(0, body.velocity.y - friction));
+    } else if (body.velocity.y < 0) {
+      body.setVelocityY(Math.min(0, body.velocity.y + friction));
+    }
   }
 
   // ═══════════════════════════════════════════════════════
@@ -383,4 +460,10 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
   get isGrounded(): boolean { return this._isGrounded; }
   get hp(): number { return this._hp; }
   get hpMax(): number { return this._hpMax; }
+
+  /**
+   * Retorna o Y do chão do lutador (sem o offset visual do pulo).
+   * Use este valor para validação de faixa, hitboxes e IA.
+   */
+  get groundY(): number { return this.y + this._appliedJumpOffset; }
 }
