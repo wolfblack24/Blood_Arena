@@ -28,6 +28,13 @@ import {
   LANE_TOLERANCE,
   EVENTS,
 } from '../config/constants';
+import {
+  DASH_DURATION,
+  DASH_SPEED,
+  DASH_STAMINA_COST,
+  DASH_COOLDOWN,
+  DASH_IFRAMES_DURATION,
+} from '../config/boss';
 
 export class Player extends Fighter {
   // ── Estado do jogador (HP, vidas, score) ───────────────
@@ -43,6 +50,7 @@ export class Player extends Fighter {
   };
   private _jumpKey!: Phaser.Input.Keyboard.Key;
   private _attackKey!: Phaser.Input.Keyboard.Key;
+  private _dashKey!: Phaser.Input.Keyboard.Key;
   private _debugKey!: Phaser.Input.Keyboard.Key;
 
   // ── Combate ────────────────────────────────────────────
@@ -58,6 +66,11 @@ export class Player extends Fighter {
 
   // ── Buffer de input ────────────────────────────────────
   private _attackBufferTime: number = 0;
+
+  // ── Esquiva (Dash) ─────────────────────────────────────
+  private _isDashing: boolean = false;
+  private _dashEndTime: number = 0;
+  private _dashCooldownEnd: number = 0;
 
   // ── Timers de estado ───────────────────────────────────
   private _stateEndTime: number = 0;
@@ -99,6 +112,7 @@ export class Player extends Fighter {
     };
     this._jumpKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this._attackKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.J);
+    this._dashKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.K);
     this._debugKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.H);
   }
 
@@ -115,6 +129,9 @@ export class Player extends Fighter {
 
     // Atualiza timers de estado
     this._updateStateTimers();
+
+    // Atualiza dash
+    this._updateDash();
 
     // Aplica atrito no chão durante Hurt/Knockdown
     if (this._fighterState === FighterState.Hurt || this._fighterState === FighterState.Knockdown) {
@@ -174,6 +191,7 @@ export class Player extends Fighter {
 
     this._handleMovement();
     this._handleJump();
+    this._handleDash();
   }
 
   private _handleMovement(): void {
@@ -222,6 +240,80 @@ export class Player extends Fighter {
 
     if (Phaser.Input.Keyboard.JustDown(this._jumpKey)) {
       this.jump(PLAYER_JUMP_FORCE);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // ESQUIVA (DASH)
+  // ═══════════════════════════════════════════════════════
+
+  private _handleDash(): void {
+    // Não pode esquivar em estados restritivos
+    if (this._fighterState === FighterState.Hurt ||
+        this._fighterState === FighterState.Knockdown ||
+        this._fighterState === FighterState.Dead ||
+        this._fighterState === FighterState.Attack) {
+      return;
+    }
+
+    // Não pode esquivar durante dash
+    if (this._isDashing) return;
+
+    // Verifica cooldown
+    if (this.scene.time.now < this._dashCooldownEnd) return;
+
+    // Verifica se a tecla foi pressionada
+    if (!Phaser.Input.Keyboard.JustDown(this._dashKey)) return;
+
+    // Verifica stamina
+    if (!this._playerState.spendStamina(DASH_STAMINA_COST)) return;
+
+    // Inicia dash
+    this._startDash();
+  }
+
+  private _startDash(): void {
+    this._isDashing = true;
+    this._dashEndTime = this.scene.time.now + DASH_DURATION;
+    this._dashCooldownEnd = this.scene.time.now + DASH_COOLDOWN;
+
+    // Determina direção do dash
+    let dashDirX = 0;
+    let dashDirY = 0;
+
+    if (this._cursors.left?.isDown || this._wasd.A.isDown) dashDirX -= 1;
+    if (this._cursors.right?.isDown || this._wasd.D.isDown) dashDirX += 1;
+    if (this._cursors.up?.isDown || this._wasd.W.isDown) dashDirY -= 1;
+    if (this._cursors.down?.isDown || this._wasd.S.isDown) dashDirY += 1;
+
+    // Se não houver direção, usa o facing
+    if (dashDirX === 0 && dashDirY === 0) {
+      dashDirX = this._facingRight ? 1 : -1;
+    }
+
+    // Normaliza
+    if (dashDirX !== 0 && dashDirY !== 0) {
+      const norm = 1 / Math.SQRT2;
+      dashDirX *= norm;
+      dashDirY *= norm;
+    }
+
+    // Aplica velocidade
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.setVelocity(dashDirX * DASH_SPEED, dashDirY * DASH_SPEED);
+
+    // Concede i-frames
+    this.grantInvulnerability(DASH_IFRAMES_DURATION);
+  }
+
+  private _updateDash(): void {
+    if (!this._isDashing) return;
+
+    // Terminou o dash
+    if (this.scene.time.now >= this._dashEndTime) {
+      this._isDashing = false;
+      const body = this.body as Phaser.Physics.Arcade.Body;
+      body.setVelocity(0, 0);
     }
   }
 

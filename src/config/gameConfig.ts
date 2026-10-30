@@ -15,6 +15,7 @@ import { PreloadScene } from '../scenes/PreloadScene';
 import { MainMenuScene } from '../scenes/MainMenuScene';
 import { GameScene } from '../scenes/GameScene';
 import { UIScene } from '../scenes/UIScene';
+import { BossTransitionScene } from '../scenes/BossTransitionScene';
 
 /**
  * Retorna a configuração completa do jogo Phaser.
@@ -45,6 +46,6 @@ export function createGameConfig(parentElement: HTMLElement): Phaser.Types.Core.
     },
 
     // ── Cenas na ordem de execução ───────────────────────
-    scene: [BootScene, PreloadScene, MainMenuScene, GameScene, UIScene],
+    scene: [BootScene, PreloadScene, MainMenuScene, GameScene, UIScene, BossTransitionScene],
   };
 }

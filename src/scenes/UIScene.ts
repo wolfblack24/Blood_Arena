@@ -32,6 +32,15 @@ export class UIScene extends Phaser.Scene {
   private _scoreText!: Phaser.GameObjects.Text;
   private _comboText!: Phaser.GameObjects.Text;
 
+  // ── Boss HUD ───────────────────────────────────────────
+  private _bossHpBar!: Phaser.GameObjects.Rectangle;
+  private _bossHpBarBg!: Phaser.GameObjects.Rectangle;
+  private _bossHpMarker!: Phaser.GameObjects.Rectangle;
+  private _bossNameText!: Phaser.GameObjects.Text;
+  private _poiseBar!: Phaser.GameObjects.Rectangle;
+  private _poiseBarBg!: Phaser.GameObjects.Rectangle;
+  private _bossHudContainer!: Phaser.GameObjects.Container;
+
   // ── Referência ao estado ───────────────────────────────
   private _playerState!: PlayerState;
 
@@ -98,11 +107,68 @@ export class UIScene extends Phaser.Scene {
       fontSize: '14px', color: '#ffaa00', fontFamily: 'monospace', fontStyle: 'bold',
     }).setOrigin(0.5, 0).setDepth(1001);
 
+    // ── Boss HUD (inicialmente oculto) ───────────────────
+    this._createBossHUD();
+
     // ── Escuta eventos ───────────────────────────────────
     this._bindEvents();
 
     // ── Remove listeners no shutdown ─────────────────────
     this.events.on('shutdown', this._unbindEvents, this);
+  }
+
+  /**
+   * Cria a HUD do boss (inicialmente oculta).
+   */
+  private _createBossHUD(): void {
+    const barWidth = 200;
+    const barHeight = 10;
+    const x = (GAME_WIDTH - barWidth) / 2;
+    const y = GAME_HEIGHT - 30;
+
+    // Container
+    this._bossHudContainer = this.add.container(0, 0);
+    this._bossHudContainer.setDepth(1000);
+    this._bossHudContainer.setVisible(false);
+
+    // Nome do boss
+    this._bossNameText = this.add.text(GAME_WIDTH / 2, y - 20, 'O AÇOUGUEIRO', {
+      fontSize: '12px',
+      color: '#ff4444',
+      fontFamily: 'monospace',
+      fontStyle: 'bold',
+    }).setOrigin(0.5, 0);
+
+    // Fundo da barra
+    this._bossHpBarBg = this.add.rectangle(x, y, barWidth, barHeight, 0x440000)
+      .setOrigin(0, 0);
+
+    // Barra de HP
+    this._bossHpBar = this.add.rectangle(x, y, barWidth, barHeight, 0xff2222)
+      .setOrigin(0, 0);
+
+    // Marcador de 50%
+    this._bossHpMarker = this.add.rectangle(x + barWidth / 2, y, 2, barHeight, 0xffff00)
+      .setOrigin(0, 0);
+
+    // Fundo da barra de poise
+    const poiseY = y + barHeight + 2;
+    this._poiseBarBg = this.add.rectangle(x, poiseY, barWidth, 4, 0x222244)
+      .setOrigin(0, 0);
+
+    // Barra de poise
+    this._poiseBar = this.add.rectangle(x, poiseY, barWidth, 4, 0x4444ff)
+      .setOrigin(0, 0);
+
+    // Adiciona ao container
+    this._bossHudContainer.add([
+      this._bossNameText,
+      this._bossHpBarBg,
+      this._bossHpBar,
+      this._bossHpMarker,
+      this._poiseBarBg,
+      this._poiseBar,
+    ]);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -151,6 +217,63 @@ export class UIScene extends Phaser.Scene {
     }
   };
 
+  // ── Boss HUD handlers ──────────────────────────────────
+
+  private _onBossArenaEnter = (): void => {
+    this._bossHudContainer.setVisible(true);
+    this._bossHudContainer.setAlpha(0);
+    this.tweens.add({
+      targets: this._bossHudContainer,
+      alpha: 1,
+      duration: 500,
+    });
+  };
+
+  private _onBossHPChanged = (hp: number, hpMax: number): void => {
+    const ratio = hp / hpMax;
+    this._bossHpBar.displayWidth = 200 * ratio;
+  };
+
+  private _onBossPhaseChanged = (phase: number): void => {
+    if (phase === 2) {
+      this._bossHpMarker.setVisible(false);
+      this._bossNameText.setText('O AÇOUGUEIRO - FASE 2');
+      this._bossNameText.setColor('#ff0000');
+    }
+  };
+
+  private _onBossPoiseChanged = (poise: number, poiseMax: number): void => {
+    const ratio = poise / poiseMax;
+    this._poiseBar.displayWidth = 200 * ratio;
+  };
+
+  private _onBossDied = (): void => {
+    this.tweens.add({
+      targets: this._bossHudContainer,
+      alpha: 0,
+      duration: 1000,
+    });
+  };
+
+  private _onBossVictory = (): void => {
+    // Mostra tela de vitória
+    const victoryText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'VITÓRIA!', {
+      fontSize: '32px',
+      color: '#ffff00',
+      fontFamily: 'monospace',
+      fontStyle: 'bold',
+      stroke: '#884400',
+      strokeThickness: 4,
+    }).setOrigin(0.5).setDepth(2000);
+
+    victoryText.setAlpha(0);
+    this.tweens.add({
+      targets: victoryText,
+      alpha: 1,
+      duration: 1000,
+    });
+  };
+
   private _bindEvents(): void {
     const events = this.game.events;
     events.on(EVENTS.HP_CHANGED, this._onHPChanged, this);
@@ -160,6 +283,13 @@ export class UIScene extends Phaser.Scene {
     events.on(EVENTS.PLAYER_DAMAGED, this._onPlayerDamaged, this);
     events.on(EVENTS.GAME_OVER, this._onGameOver, this);
     events.on(EVENTS.COMBO_CHANGED, this._onComboChanged, this);
+    // Boss events
+    events.on(EVENTS.BOSS_ARENA_ENTER, this._onBossArenaEnter, this);
+    events.on(EVENTS.BOSS_HP_CHANGED, this._onBossHPChanged, this);
+    events.on(EVENTS.BOSS_PHASE_CHANGED, this._onBossPhaseChanged, this);
+    events.on(EVENTS.BOSS_POISE_CHANGED, this._onBossPoiseChanged, this);
+    events.on(EVENTS.BOSS_DIED, this._onBossDied, this);
+    events.on(EVENTS.BOSS_VICTORY, this._onBossVictory, this);
   }
 
   private _unbindEvents(): void {
@@ -171,6 +301,13 @@ export class UIScene extends Phaser.Scene {
     events.off(EVENTS.PLAYER_DAMAGED, this._onPlayerDamaged, this);
     events.off(EVENTS.GAME_OVER, this._onGameOver, this);
     events.off(EVENTS.COMBO_CHANGED, this._onComboChanged, this);
+    // Boss events
+    events.off(EVENTS.BOSS_ARENA_ENTER, this._onBossArenaEnter, this);
+    events.off(EVENTS.BOSS_HP_CHANGED, this._onBossHPChanged, this);
+    events.off(EVENTS.BOSS_PHASE_CHANGED, this._onBossPhaseChanged, this);
+    events.off(EVENTS.BOSS_POISE_CHANGED, this._onBossPoiseChanged, this);
+    events.off(EVENTS.BOSS_DIED, this._onBossDied, this);
+    events.off(EVENTS.BOSS_VICTORY, this._onBossVictory, this);
   }
 
   // ═══════════════════════════════════════════════════════

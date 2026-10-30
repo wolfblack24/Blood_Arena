@@ -141,6 +141,29 @@ export function generatePlaceholderTextures(scene: Phaser.Scene): void {
   if (!scene.textures.exists('ground_tex')) {
     _createGroundTexture(scene);
   }
+
+  // ── Texturas do boss (protegidas contra duplicação) ─
+  if (!scene.textures.exists('boss_idle')) {
+    _createBossTexture(scene, 'boss_idle', 0x8b0000, 0xcc9966);
+  }
+  if (!scene.textures.exists('boss_phase2')) {
+    _createBossTexture(scene, 'boss_phase2', 0x440044, 0xff4444);
+  }
+  if (!scene.textures.exists('hazard_falling')) {
+    _createHazardTexture(scene);
+  }
+  if (!scene.textures.exists('hazard_particle')) {
+    _createHazardParticleTexture(scene);
+  }
+  if (!scene.textures.exists('bg_boss_far')) {
+    _createBossArenaFarTexture(scene);
+  }
+  if (!scene.textures.exists('bg_boss_near')) {
+    _createBossArenaNearTexture(scene);
+  }
+  if (!scene.textures.exists('ground_boss')) {
+    _createBossArenaGroundTexture(scene);
+  }
 }
 
 /**
@@ -226,6 +249,138 @@ function _createGroundTexture(scene: Phaser.Scene): void {
   }
 
   gfx.generateTexture('ground_tex', texW, texH);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura procedural para o boss (fase 1).
+ */
+function _createBossTexture(scene: Phaser.Scene, key: string, bodyColor: number, headColor: number): void {
+  const w = 40;
+  const h = 56;
+  const gfx = scene.add.graphics();
+
+  // Corpo grande
+  gfx.fillStyle(bodyColor, 1);
+  gfx.fillRect(8, 0, 24, 36);
+
+  // Cabeça
+  gfx.fillStyle(headColor, 1);
+  gfx.fillRect(12, -36, 16, 16);
+
+  // Pernas
+  gfx.fillStyle(0x1a1a1a, 1);
+  gfx.fillRect(10, -6, 8, 6);
+  gfx.fillRect(22, -6, 8, 6);
+
+  // Braços
+  gfx.fillStyle(bodyColor, 1);
+  gfx.fillRect(0, 4, 8, 20);
+  gfx.fillRect(32, 4, 8, 20);
+
+  gfx.generateTexture(key, w, h);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para hazard caindo.
+ */
+function _createHazardTexture(scene: Phaser.Scene): void {
+  const gfx = scene.add.graphics();
+  gfx.fillStyle(0xff4400, 1);
+  gfx.fillTriangle(0, 0, 12, 0, 6, 16);
+  gfx.generateTexture('hazard_falling', 12, 16);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para partícula de hazard.
+ */
+function _createHazardParticleTexture(scene: Phaser.Scene): void {
+  const gfx = scene.add.graphics();
+  gfx.fillStyle(0xff6600, 1);
+  gfx.fillRect(0, 0, 4, 4);
+  gfx.generateTexture('hazard_particle', 4, 4);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para fundo da arena do boss (distante).
+ */
+function _createBossArenaFarTexture(scene: Phaser.Scene): void {
+  const texW = 384;
+  const texH = 224;
+  const gfx = scene.add.graphics();
+
+  // Fundo escuro avermelhado
+  gfx.fillStyle(0x1a0a0a, 1);
+  gfx.fillRect(0, 0, texW, texH);
+
+  // Pilares
+  gfx.fillStyle(0x2a1a1a, 1);
+  for (let x = 40; x < texW; x += 80) {
+    gfx.fillRect(x, 40, 20, 180);
+  }
+
+  // Símbolos nas paredes
+  gfx.fillStyle(0x440000, 0.5);
+  for (let i = 0; i < 10; i++) {
+    const x = Phaser.Math.Between(20, texW - 20);
+    const y = Phaser.Math.Between(60, 180);
+    gfx.fillCircle(x, y, Phaser.Math.Between(3, 6));
+  }
+
+  gfx.generateTexture('bg_boss_far', texW, texH);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para fundo da arena do boss (próximo).
+ */
+function _createBossArenaNearTexture(scene: Phaser.Scene): void {
+  const texW = 384;
+  const texH = 224;
+  const gfx = scene.add.graphics();
+
+  gfx.fillStyle(0x0a0a0a, 0.3);
+  gfx.fillRect(0, 0, texW, texH);
+
+  // Correntes
+  gfx.fillStyle(0x3a2a2a, 0.8);
+  for (let x = 30; x < texW; x += 60) {
+    gfx.fillRect(x, 0, 3, 100);
+  }
+
+  gfx.generateTexture('bg_boss_near', texW, texH);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para o chão da arena do boss.
+ */
+function _createBossArenaGroundTexture(scene: Phaser.Scene): void {
+  const texW = 128;
+  const texH = 90;
+  const gfx = scene.add.graphics();
+
+  // Chão escuro
+  gfx.fillStyle(0x2a1a1a, 1);
+  gfx.fillRect(0, 0, texW, texH);
+
+  // Manchas de sangue
+  gfx.fillStyle(0x440000, 0.6);
+  for (let i = 0; i < 20; i++) {
+    const x = Phaser.Math.Between(0, texW);
+    const y = Phaser.Math.Between(0, texH);
+    gfx.fillCircle(x, y, Phaser.Math.Between(2, 6));
+  }
+
+  // Símbolos ritualísticos
+  gfx.fillStyle(0x660000, 0.4);
+  gfx.strokeCircle(texW / 2, texH / 2, 30);
+  gfx.strokeCircle(texW / 2, texH / 2, 20);
+
+  gfx.generateTexture('ground_boss', texW, texH);
   gfx.destroy();
 }
 

@@ -89,4 +89,12 @@ export const EVENTS = {
   ENEMY_DAMAGED: 'enemy:damaged',
   ENEMY_DIED: 'enemy:died',
   COMBO_CHANGED: 'combo:changed',
+  // Boss events
+  BOSS_ARENA_ENTER: 'boss:arena:enter',
+  BOSS_HP_CHANGED: 'boss:hp:changed',
+  BOSS_PHASE_CHANGED: 'boss:phase:changed',
+  BOSS_POISE_CHANGED: 'boss:poise:changed',
+  BOSS_STAGGER: 'boss:stagger',
+  BOSS_DIED: 'boss:died',
+  BOSS_VICTORY: 'boss:victory',
 } as const;
