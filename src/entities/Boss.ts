@@ -31,9 +31,12 @@ import {
   BOSS_APPROACH_SPEED,
   BOSS_ARENA_X,
   BOSS_ARENA_WIDTH,
+  BOSS_ARENA_Y_TOP,
+  BOSS_ARENA_Y_BOTTOM,
   STAGGER_DAMAGE_MULT,
 } from '../config/boss';
-import { EVENTS } from '../config/constants';
+import { EVENTS, WALK_ZONE_TOP, WALK_ZONE_BOTTOM } from '../config/constants';
+import { debugLog } from '../systems/debugLog';
 
 /**
  * Estados específicos do boss.
@@ -277,11 +280,11 @@ export class Boss extends Fighter {
     const body = this.body as Phaser.Physics.Arcade.Body;
     if (!body) return;
 
-    // Limites da arena do boss
+    // Limites da arena do boss (usando constantes)
     const arenaMinX = BOSS_ARENA_X + 20; // Margem de segurança
     const arenaMaxX = BOSS_ARENA_X + BOSS_ARENA_WIDTH - 20;
-    const arenaMinY = 140; // WALK_ZONE_TOP
-    const arenaMaxY = 210; // WALK_ZONE_BOTTOM
+    const arenaMinY = BOSS_ARENA_Y_TOP;
+    const arenaMaxY = BOSS_ARENA_Y_BOTTOM;
 
     // Limite esquerdo da arena
     if (this.x < arenaMinX) {
@@ -316,37 +319,56 @@ export class Boss extends Fighter {
     const body = this.body as Phaser.Physics.Arcade.Body;
     const player = this._player;
     
-    // DEBUG: Log do estado e velocidade
-    if (this._bossState === BossState.Idle || this._bossState === BossState.Recover) {
-      console.log(`[Boss AI] State: ${this._bossState}, Velocity: (${body.velocity.x.toFixed(2)}, ${body.velocity.y.toFixed(2)}), Position: (${this.x.toFixed(2)}, ${this.y.toFixed(2)})`);
-    }
-
     // Não decide se estiver ocupado
     if (this._bossState === BossState.Telegraph ||
         this._bossState === BossState.Attacking ||
         this._bossState === BossState.Stagger ||
         this._bossState === BossState.Transition ||
         this._bossState === BossState.Dead) {
+      // Zera velocidade ao entrar nesses estados
+      body.setVelocity(0, 0);
       return;
     }
 
-    // Dentro de _updateAI, quando estiver em Idle e longe do jogador:
+    // Aproximação com histerese (zona morta para evitar tremor)
     if (this._bossState === BossState.Idle && player) {
-      const distance = Phaser.Math.Distance.Between(this.x, this.y, player.x, player.y);
-      const attackRange = 60; // Ajuste conforme necessário
+      const dx = player.x - this.x;
+      const dy = player.groundY - this.groundY;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
       
-      if (distance > attackRange) {
-        // Boss deve se mover em direção ao jogador
-        const speed = 50; // Velocidade mais lenta que inimigos comuns (mais ameaçador)
-        const dx = player.x - this.x;
+      // Zona morta: 6px em X, 4px em Y
+      const deadZoneX = 6;
+      const deadZoneY = 4;
+      
+      // Movimento em X (aproximação)
+      if (absDx > BOSS_ATTACK_RADIUS) {
+        // Fora do raio de ataque: aproxima-se
         const moveDir = dx > 0 ? 1 : -1;
-        
-        body.setVelocityX(speed * moveDir);
+        body.setVelocityX(BOSS_APPROACH_SPEED * moveDir);
+        this.setFacing(dx > 0);
+      } else if (absDx > deadZoneX) {
+        // Dentro do raio mas fora da zona morta: ajusta lentamente
+        const moveDir = dx > 0 ? 1 : -1;
+        body.setVelocityX(BOSS_APPROACH_SPEED * 0.5 * moveDir);
         this.setFacing(dx > 0);
       } else {
+        // Dentro da zona morta: para
         body.setVelocityX(0);
-        // Agora pode decidir atacar
-        this._makeDecision();
+      }
+      
+      // Movimento em Y (alinhar na mesma faixa)
+      if (absDy > BOSS_LANE_TOLERANCE) {
+        // Fora da tolerância de faixa: alinha
+        const moveDir = dy > 0 ? 1 : -1;
+        body.setVelocityY(BOSS_APPROACH_SPEED * 0.6 * moveDir); // Mais lento em Y
+      } else if (absDy > deadZoneY) {
+        // Dentro da tolerância mas fora da zona morta: ajusta lentamente
+        const moveDir = dy > 0 ? 1 : -1;
+        body.setVelocityY(BOSS_APPROACH_SPEED * 0.3 * moveDir);
+      } else {
+        // Dentro da zona morta: para
+        body.setVelocityY(0);
       }
     }
 
@@ -363,29 +385,33 @@ export class Boss extends Fighter {
 
   /**
    * Decide qual ataque usar.
+   * Só pode ser chamada pelo metrônomo (BOSS_DECISION_DELAY).
    */
   private _makeDecision(): void {
     if (!this._player) {
-      console.log('[Boss AI] _makeDecision: jogador não definido');
+      debugLog('[Boss AI] _makeDecision: jogador não definido');
       return;
     }
     if (this._bossState !== BossState.Idle && this._bossState !== BossState.Recover) {
-      console.log(`[Boss AI] _makeDecision: estado inválido (${this._bossState})`);
+      debugLog(`[Boss AI] _makeDecision: estado inválido (${this._bossState})`);
       return;
     }
 
+    // Vira para o jogador antes do telegraph
     const dx = this._player.x - this.x;
+    this.setFacing(dx > 0);
+
     const distance = Math.abs(dx);
-    console.log(`[Boss AI] _makeDecision: distância do jogador = ${distance.toFixed(2)}, attackRadius = ${BOSS_ATTACK_RADIUS}`);
+    debugLog(`[Boss AI] _makeDecision: distância = ${distance.toFixed(2)}, attackRadius = ${BOSS_ATTACK_RADIUS}`);
 
     // Só ataca se estiver dentro do attackRadius
     if (distance <= BOSS_ATTACK_RADIUS) {
       // Escolhe ataque aleatório ponderado
       const attackType = this._chooseAttack();
-      console.log(`[Boss AI] Iniciando ataque: ${attackType}`);
+      debugLog(`[Boss AI] Iniciando ataque: ${attackType}`);
       this._startAttack(attackType);
     } else {
-      console.log('[Boss AI] Jogador muito longe, continuando aproximação');
+      debugLog('[Boss AI] Jogador muito longe, continuando aproximação');
     }
   }
 
@@ -730,7 +756,7 @@ export class Boss extends Fighter {
     // Ativa todas as hurtboxes
     this._setAllHurtboxesActive(true);
     
-    console.log('[Boss] startFight() chamado - Boss pronto para lutar');
+    debugLog('[Boss] startFight() chamado - Boss pronto para lutar');
   }
 
   /**

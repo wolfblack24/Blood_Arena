@@ -16,8 +16,9 @@
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
-import { Boss, BossState } from '../entities/Boss';
+import { Boss, BossState, BossHurtbox } from '../entities/Boss';
 import { FallingHazard } from '../entities/FallingHazard';
+import { BossProjectile } from '../entities/BossProjectile';
 import { FighterState } from '../entities/Fighter';
 import { PlayerState } from '../state/PlayerState';
 import {
@@ -49,9 +50,13 @@ import {
   BOSS_MINION_MAX,
   BOSS_DEATH_SLOWMO_DURATION,
   BOSS_DEATH_EXPLOSION_PARTICLES,
+  BOSS_PROJECTILE_POOL_SIZE,
+  BOSS_ATTACKS,
+  BOSS_LANE_TOLERANCE,
 } from '../config/boss';
 import { STAGE_WAVES, ENDLESS_RESPAWN, GO_ARROW_ADVANCE_DISTANCE } from '../config/stage';
 import { setStageBounds, setArenaBounds, lockToCurrentScreen, unlockBounds, isArenaMode } from '../systems/LevelBounds';
+import { debugLog } from '../systems/debugLog';
 
 export class GameScene extends Phaser.Scene {
   // ── Entidades ──────────────────────────────────────────
@@ -61,6 +66,7 @@ export class GameScene extends Phaser.Scene {
   private _enemyGroup!: Phaser.Physics.Arcade.Group;
   private _boss?: Boss;
   private _hazards: FallingHazard[] = [];
+  private _projectiles: BossProjectile[] = [];
 
   // ── Parallax ───────────────────────────────────────────
   private _bgFar!: Phaser.GameObjects.TileSprite;
@@ -90,6 +96,7 @@ export class GameScene extends Phaser.Scene {
   private _waveTriggered: boolean[] = [];
   private _goArrowActive: boolean = false;
   private _goArrowStartX: number = 0;
+  private _lastWaveCleared: boolean = false;
 
   // ── Boss ───────────────────────────────────────────────
   private _bossTriggered: boolean = false;
@@ -113,6 +120,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
+    // ── RESET DE ESTADO (para quando a cena é reutilizada) ─
+    this._bossTriggered = false;
+    this._bossArenaActive = false;
+    this._boss = undefined;
+    this._playerInputBlocked = false;
+    this._goArrowActive = false;
+    this._lastWaveCleared = false;
+    this._enemies = [];
+    this._hazards = [];
+    this._projectiles = [];
+    
+    // Restaura timeScale
+    this.time.timeScale = 1;
+    this.physics.world.timeScale = 1;
+
     // ── Inicializa o estado do jogador ───────────────────
     this._playerState = new PlayerState(this.game.events);
 
@@ -177,8 +199,11 @@ export class GameScene extends Phaser.Scene {
     this.game.events.on(EVENTS.BOSS_TRANSITION_COMPLETE, this._onBossTransitionComplete, this);
     this.game.events.on(EVENTS.BOSS_DIED, this._onBossDied, this);
     this.game.events.on(EVENTS.HAZARD_IMPACT, this._onHazardImpact, this);
+    this.game.events.on(EVENTS.BOSS_PROJECTILE, this._onBossProjectile, this);
+    this.game.events.on(EVENTS.BOSS_AOE, this._onBossAoE, this);
     this.events.on('postupdate', this._onPostUpdate, this);
-    this.events.on('shutdown', this._onShutdown, this);
+    // Usa 'once' para evitar acúmulo de listeners
+    this.events.once('shutdown', this._onShutdown, this);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -251,6 +276,7 @@ export class GameScene extends Phaser.Scene {
     // Ativa seta GO
     this._goArrowActive = true;
     this._goArrowStartX = this._player.x;
+    this._lastWaveCleared = true;
     this.game.events.emit(EVENTS.GO_ARROW, true);
     this.game.events.emit(EVENTS.WAVE_CLEARED, this._currentWaveIndex);
   }
@@ -271,9 +297,8 @@ export class GameScene extends Phaser.Scene {
   private _checkBossTrigger(): void {
     if (this._bossTriggered) return;
 
-    // Verifica se todas as ondas foram concluídas
-    const allWavesCleared = this._waveTriggered.every(t => t);
-    if (!allWavesCleared) return;
+    // Verifica se a última onda foi concluída
+    if (!this._lastWaveCleared) return;
 
     // Verifica se não há inimigos vivos
     const aliveEnemies = this._enemies.filter(e => e.isActive && e.fighterState !== FighterState.Dead);
@@ -482,6 +507,165 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ═══════════════════════════════════════════════════════
+  // PROJÉTEIS DO BOSS
+  // ═══════════════════════════════════════════════════════
+
+  private _onBossProjectile(data: { x: number; y: number; count: number; speedMult: number; facingRight: boolean }): void {
+    if (!this._boss) return;
+
+    for (let i = 0; i < data.count; i++) {
+      // Encontra projétil inativo no pool
+      let projectile = this._projectiles.find(p => !p.isActive);
+      if (!projectile) {
+        if (this._projectiles.length >= BOSS_PROJECTILE_POOL_SIZE) continue;
+        projectile = new BossProjectile(this);
+        this._projectiles.push(projectile);
+      }
+
+      // Calcula offset para leque (fase 2)
+      let offsetY = 0;
+      if (data.count > 1) {
+        const spread = 15;
+        offsetY = (i - (data.count - 1) / 2) * spread;
+      }
+
+      const direction = data.facingRight ? 1 : -1;
+      projectile.activate(data.x + direction * 20, data.y + offsetY, direction, data.speedMult, BOSS_ATTACKS.projectile.damage);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // AOE DO BOSS
+  // ═══════════════════════════════════════════════════════
+
+  private _onBossAoE(data: { x: number; y: number; width: number; height: number }): void {
+    if (!this._boss) return;
+
+    // Cria telegraph visual (elipse)
+    const telegraph = this.add.ellipse(data.x, data.y, data.width, data.height / 2, 0xff0000, 0.3);
+    telegraph.setDepth(500);
+
+    // Anima o telegraph
+    this.tweens.add({
+      targets: telegraph,
+      scaleX: 1.2,
+      scaleY: 1.2,
+      alpha: 0.5,
+      duration: BOSS_ATTACKS.aoe.telegraphDuration,
+      ease: 'Sine.easeInOut',
+    });
+
+    // Após o telegraph, aplica dano
+    this.time.delayedCall(BOSS_ATTACKS.aoe.telegraphDuration, () => {
+      // Verifica se o jogador está na área de dano (elíptico)
+      const playerX = this._player.x;
+      const playerY = this._player.groundY;
+      const playerZ = this._player.jumpHeight;
+
+      const dx = (playerX - data.x) / (data.width / 2);
+      const dy = (playerY - data.y) / (data.height / 4);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      // Verifica se está dentro da elipse E não está pulando alto
+      if (distance <= 1 && playerZ < 15) {
+        this._player.takePlayerDamage(BOSS_ATTACKS.aoe.damage, 0, false);
+        this.cameras.main.shake(200, 0.01);
+      }
+
+      // Remove o telegraph
+      telegraph.destroy();
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // DANO MANUAL DO JOGADOR NO BOSS
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Verifica dano do jogador no boss (resolução manual, sem overlap).
+   * Para cada swing ativo, testa cada hurtbox e aplica dano à de maior multiplicador.
+   */
+  private _checkPlayerDamageToBoss(): void {
+    if (!this._boss || !this._player.getCurrentAttack()) return;
+
+    const attack = this._player.getCurrentAttack()!;
+    const hitboxZone = this._player.getHitboxZone();
+    const hitboxBody = hitboxZone.body as Phaser.Physics.Arcade.Body;
+
+    if (!hitboxBody.enable) return;
+
+    // Obtém hurtboxes ativas do boss
+    const activeHurtboxes = this._boss.getActiveHurtboxes();
+    let bestHurtbox: BossHurtbox | null = null;
+    let bestMultiplier = 0;
+
+    // Para cada hurtbox, verifica se está sendo atingida
+    for (const hurtbox of activeHurtboxes) {
+      if (!hurtbox.body.enable) continue;
+
+      // (a) Diferença de faixa <= BOSS_LANE_TOLERANCE (usando groundY)
+      const laneDiff = Math.abs(this._player.groundY - this._boss.groundY);
+      if (laneDiff > BOSS_LANE_TOLERANCE) continue;
+
+      // (b) Sobreposição em X entre a hitbox do golpe e a parte
+      const hitboxLeft = hitboxZone.x - hitboxBody.width / 2;
+      const hitboxRight = hitboxZone.x + hitboxBody.width / 2;
+      const hurtboxLeft = hurtbox.zone.x - hurtbox.body.width / 2;
+      const hurtboxRight = hurtbox.zone.x + hurtbox.body.width / 2;
+
+      const xOverlap = hitboxRight > hurtboxLeft && hitboxLeft < hurtboxRight;
+      if (!xOverlap) continue;
+
+      // (c) Sobreposição do intervalo Z do golpe com [zMin, zMax] da parte
+      const playerZ = this._player.jumpHeight;
+      const zTolerance = attack.zTolerance;
+      const hitZMin = playerZ - zTolerance;
+      const hitZMax = playerZ + zTolerance;
+
+      // Se o boss está em stagger, a cabeça desce para a altura do alcance do jogador
+      let zMin = hurtbox.data.zMin;
+      let zMax = hurtbox.data.zMax;
+      if (hurtbox.data.name === 'head' && this._boss.isStaggered) {
+        zMin = 0; // Cabeça desce para o alcance do jogador
+        zMax = 28;
+      }
+
+      const zOverlap = hitZMax >= zMin && hitZMin <= zMax;
+      if (!zOverlap) continue;
+
+      // Verifica se já foi atingida neste swing
+      if (this._player.canHitTarget(this._boss)) {
+        // Escolhe a hurtbox com maior multiplicador
+        if (hurtbox.data.damageMultiplier > bestMultiplier) {
+          bestHurtbox = hurtbox;
+          bestMultiplier = hurtbox.data.damageMultiplier;
+        }
+      }
+    }
+
+    // Aplica dano à hurtbox de maior multiplicador
+    if (bestHurtbox) {
+      this._player.registerHit(this._boss);
+      const knockbackDir = this._player.facingRight ? 1 : -1;
+      const knockbackX = knockbackDir * 50; // Knockback leve no boss
+
+      const died = this._boss.takeBossDamage(bestHurtbox, attack.damage, knockbackX);
+
+      // Hitstop, shake e flash
+      (this as any)._hitstopFrames = attack.hitstop;
+      this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
+      this._flashImpact(this._boss.x, this._boss.y - 16);
+
+      // Combo
+      (this as any)._comboCount++;
+      (this as any)._comboTimer = this.time.now + 2000;
+      this.game.events.emit(EVENTS.COMBO_CHANGED, (this as any)._comboCount);
+
+      debugLog(`[Boss Damage] Parte: ${bestHurtbox.data.name}, Dano: ${attack.damage * bestMultiplier}, Multiplicador: ${bestMultiplier}`);
+    }
+  }
+
   private _onBossDied(): void {
     if (!this._boss) return;
 
@@ -493,6 +677,13 @@ export class GameScene extends Phaser.Scene {
     if (this._minionTimer) {
       this._minionTimer.remove(false);
       this._minionTimer = undefined;
+    }
+
+    // Remove projéteis
+    for (const projectile of this._projectiles) {
+      if (projectile.isActive) {
+        projectile.deactivate();
+      }
     }
 
     // Remove lacaios
@@ -515,8 +706,10 @@ export class GameScene extends Phaser.Scene {
     // Screen shake
     this.cameras.main.shake(500, 0.02);
 
-    // Após slow motion, mostra vitória
-    this.time.delayedCall(BOSS_DEATH_SLOWMO_DURATION, () => {
+    // Após slow motion (usando tempo real), mostra vitória
+    // Divide a duração pelo timeScale para durar ~1s reais
+    const realDuration = BOSS_DEATH_SLOWMO_DURATION / this.time.timeScale;
+    this.time.delayedCall(realDuration, () => {
       this.time.timeScale = 1;
       this.physics.world.timeScale = 1;
       this.game.events.emit(EVENTS.BOSS_VICTORY);
@@ -767,6 +960,24 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    for (const projectile of this._projectiles) {
+      if (projectile.isActive) {
+        projectile.update(time, delta);
+        // Verifica se o projétil atingiu o jogador
+        if (projectile.canHitPlayer(this._player)) {
+          this._player.takePlayerDamage(projectile.getDamage(), 0, false);
+          projectile.markAsHit();
+          projectile.deactivate();
+          this.cameras.main.shake(100, 0.005);
+        }
+      }
+    }
+
+    // Dano manual do jogador no boss (resolução manual, sem overlap)
+    if (this._boss && this._player.getCurrentAttack()) {
+      this._checkPlayerDamageToBoss();
+    }
+
     // Combo timer
     if (this.time.now > this._comboTimer && this._comboCount > 0) {
       this._comboCount = 0;
@@ -945,20 +1156,31 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _onShutdown = (): void => {
+    // Remove listeners
     this.game.events.off(EVENTS.ENEMY_DIED, this._onEnemyDied, this);
     this.game.events.off(EVENTS.BOSS_PHASE_TRANSITION, this._onBossPhaseTransition, this);
     this.game.events.off(EVENTS.BOSS_TRANSITION_COMPLETE, this._onBossTransitionComplete, this);
     this.game.events.off(EVENTS.BOSS_DIED, this._onBossDied, this);
     this.game.events.off(EVENTS.HAZARD_IMPACT, this._onHazardImpact, this);
+    this.game.events.off(EVENTS.BOSS_PROJECTILE, this._onBossProjectile, this);
+    this.game.events.off(EVENTS.BOSS_AOE, this._onBossAoE, this);
     this.events.off('postupdate', this._onPostUpdate, this);
 
+    // Remove timers
     if (this._hazardTimer) {
       this._hazardTimer.remove(false);
+      this._hazardTimer = undefined;
     }
     if (this._minionTimer) {
       this._minionTimer.remove(false);
+      this._minionTimer = undefined;
     }
 
+    // Restaura timeScale
+    this.time.timeScale = 1;
+    this.physics.world.timeScale = 1;
+
+    // Cleanup de entidades
     this._player?.cleanup();
     for (const enemy of this._enemies) {
       enemy?.cleanup();
@@ -968,6 +1190,28 @@ export class GameScene extends Phaser.Scene {
     }
     for (const hazard of this._hazards) {
       hazard?.cleanup();
+    }
+    for (const projectile of this._projectiles) {
+      projectile?.cleanup();
+    }
+
+    // Limpa arrays
+    this._enemies = [];
+    this._hazards = [];
+    this._projectiles = [];
+
+    // Limpa cenário do boss
+    if (this._bgBossFar) {
+      this._bgBossFar.destroy();
+      this._bgBossFar = undefined;
+    }
+    if (this._bgBossNear) {
+      this._bgBossNear.destroy();
+      this._bgBossNear = undefined;
+    }
+    if (this._groundBoss) {
+      this._groundBoss.destroy();
+      this._groundBoss = undefined;
     }
 
     setStageBounds();

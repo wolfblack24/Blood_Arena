@@ -51,6 +51,8 @@ export class Player extends Fighter {
   private _jumpKey!: Phaser.Input.Keyboard.Key;
   private _attackKey!: Phaser.Input.Keyboard.Key;
   private _dashKey!: Phaser.Input.Keyboard.Key;
+  private _grabKey!: Phaser.Input.Keyboard.Key;
+  private _specialKey!: Phaser.Input.Keyboard.Key;
   private _debugKey!: Phaser.Input.Keyboard.Key;
 
   // ── Combate ────────────────────────────────────────────

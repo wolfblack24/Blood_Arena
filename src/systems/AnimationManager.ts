@@ -164,6 +164,34 @@ export function generatePlaceholderTextures(scene: Phaser.Scene): void {
   if (!scene.textures.exists('ground_boss')) {
     _createBossArenaGroundTexture(scene);
   }
+  // Novas texturas para PARTE 1 e 2
+  if (!scene.textures.exists('boss_projectile')) {
+    _createBossProjectileTexture(scene);
+  }
+  if (!scene.textures.exists('breakable')) {
+    _createBreakableTexture(scene);
+  }
+  if (!scene.textures.exists('breakable_particle')) {
+    _createBreakableParticleTexture(scene);
+  }
+  if (!scene.textures.exists('pickup_food_small')) {
+    _createPickupTexture(scene, 'pickup_food_small', 0xff6600);
+  }
+  if (!scene.textures.exists('pickup_food_large')) {
+    _createPickupTexture(scene, 'pickup_food_large', 0xff3300);
+  }
+  if (!scene.textures.exists('pickup_knife')) {
+    _createPickupTexture(scene, 'pickup_knife', 0xcccccc);
+  }
+  if (!scene.textures.exists('pickup_stick')) {
+    _createPickupTexture(scene, 'pickup_stick', 0x8b4513);
+  }
+  if (!scene.textures.exists('enemy_fast')) {
+    _createEnemyVariantTexture(scene, 'enemy_fast', 0x006600, 0x88ff88);
+  }
+  if (!scene.textures.exists('enemy_heavy')) {
+    _createEnemyVariantTexture(scene, 'enemy_heavy', 0x333366, 0x9999cc);
+  }
 }
 
 /**
@@ -381,6 +409,85 @@ function _createBossArenaGroundTexture(scene: Phaser.Scene): void {
   gfx.strokeCircle(texW / 2, texH / 2, 20);
 
   gfx.generateTexture('ground_boss', texW, texH);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para projétil do boss.
+ */
+function _createBossProjectileTexture(scene: Phaser.Scene): void {
+  const gfx = scene.add.graphics();
+  gfx.fillStyle(0xff4400, 1);
+  gfx.fillCircle(6, 6, 6);
+  gfx.fillStyle(0xffaa00, 1);
+  gfx.fillCircle(6, 6, 3);
+  gfx.generateTexture('boss_projectile', 12, 12);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para quebrável (barril).
+ */
+function _createBreakableTexture(scene: Phaser.Scene): void {
+  const gfx = scene.add.graphics();
+  // Barril
+  gfx.fillStyle(0x8b4513, 1);
+  gfx.fillRect(2, 0, 12, 16);
+  // Faixas
+  gfx.fillStyle(0x654321, 1);
+  gfx.fillRect(2, 4, 12, 2);
+  gfx.fillRect(2, 10, 12, 2);
+  gfx.generateTexture('breakable', 16, 16);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para partícula de quebrável.
+ */
+function _createBreakableParticleTexture(scene: Phaser.Scene): void {
+  const gfx = scene.add.graphics();
+  gfx.fillStyle(0x8b4513, 1);
+  gfx.fillRect(0, 0, 4, 4);
+  gfx.generateTexture('breakable_particle', 4, 4);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para pickup (item).
+ */
+function _createPickupTexture(scene: Phaser.Scene, key: string, color: number): void {
+  const gfx = scene.add.graphics();
+  gfx.fillStyle(color, 1);
+  gfx.fillRect(2, 2, 8, 8);
+  // Brilho
+  gfx.fillStyle(0xffffff, 0.5);
+  gfx.fillRect(3, 3, 2, 2);
+  gfx.generateTexture(key, 12, 12);
+  gfx.destroy();
+}
+
+/**
+ * Gera textura para variante de inimigo.
+ */
+function _createEnemyVariantTexture(scene: Phaser.Scene, key: string, bodyColor: number, headColor: number): void {
+  const w = 22;
+  const h = 32;
+  const gfx = scene.add.graphics();
+  
+  // Corpo
+  gfx.fillStyle(bodyColor, 1);
+  gfx.fillRect(4, 0, 14, 18);
+  
+  // Cabeça
+  gfx.fillStyle(headColor, 1);
+  gfx.fillRect(6, -22, 10, 8);
+  
+  // Pernas
+  gfx.fillStyle(0x1a1a1a, 1);
+  gfx.fillRect(5, -4, 5, 4);
+  gfx.fillRect(12, -4, 5, 4);
+  
+  gfx.generateTexture(key, w, h);
   gfx.destroy();
 }
 
