@@ -97,4 +97,11 @@ export const EVENTS = {
   BOSS_STAGGER: 'boss:stagger',
   BOSS_DIED: 'boss:died',
   BOSS_VICTORY: 'boss:victory',
+  BOSS_PROJECTILE: 'boss:projectile',
+  BOSS_AOE: 'boss:aoe',
+  BOSS_PHASE_TRANSITION: 'boss:phase:transition',
+  BOSS_TRANSITION_COMPLETE: 'boss:transition:complete',
+  BOSS_TAIL_BROKEN: 'boss:tail:broken',
+  HAZARD_IMPACT: 'hazard:impact',
+  GO_ARROW: 'go:arrow',
 } as const;

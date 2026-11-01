@@ -396,7 +396,7 @@ export class Boss extends Fighter {
     const count = this._phase === 1 ? 1 : 3;
     const speedMult = this._phase === 1 ? 1 : 1.4;
 
-    this.scene.game.events.emit('boss:projectile', {
+    this.scene.game.events.emit(EVENTS.BOSS_PROJECTILE, {
       x: this.x,
       y: this.y,
       count,
@@ -407,7 +407,7 @@ export class Boss extends Fighter {
 
   private _executeAoE(): void {
     // Emite evento para a GameScene criar a área de dano
-    this.scene.game.events.emit('boss:aoe', {
+    this.scene.game.events.emit(EVENTS.BOSS_AOE, {
       x: this.x,
       y: this.y,
       width: this._currentAttack!.hitboxWidth,
@@ -470,7 +470,6 @@ export class Boss extends Fighter {
 
     // Aplica dano ao HP
     this._hp = Math.max(0, this._hp - damage);
-    this.scene.game.events.emit(EVENTS.BOSS_HP_CHANGED, this._hp, BOSS_HP);
 
     // Aplica dano à durabilidade (se tiver)
     if (hurtbox.data.durability && !hurtbox.isBroken) {
@@ -479,14 +478,14 @@ export class Boss extends Fighter {
         // Cauda quebrou
         hurtbox.setActive(false);
         this._enterStagger();
-        this.scene.game.events.emit('boss:tail:broken');
+        this.scene.game.events.emit(EVENTS.BOSS_TAIL_BROKEN);
       }
     }
 
     // Reduz poise (super armor)
     this._reducePoise(damage * 0.5);
 
-    // Emite evento de dano
+    // Emite evento de dano UMA VEZ
     this.scene.game.events.emit(EVENTS.BOSS_HP_CHANGED, this._hp, BOSS_HP);
 
     // Verifica morte
@@ -514,7 +513,7 @@ export class Boss extends Fighter {
     this._setAllHurtboxesActive(false);
 
     // Emite evento para a GameScene iniciar a cutscene
-    this.scene.game.events.emit('boss:phase:transition');
+    this.scene.game.events.emit(EVENTS.BOSS_PHASE_TRANSITION);
   }
 
   /**

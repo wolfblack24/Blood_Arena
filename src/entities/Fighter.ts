@@ -19,11 +19,9 @@ import Phaser from 'phaser';
 import { AnimationName } from '../systems/AnimationManager';
 import {
   PLAYER_GRAVITY,
-  WALK_ZONE_TOP,
-  WALK_ZONE_BOTTOM,
-  WORLD_WIDTH,
   KNOCKBACK_FRICTION,
 } from '../config/constants';
+import { getMinX, getMaxX, getMinY, getMaxY } from '../systems/LevelBounds';
 
 /**
  * Estados possíveis de um lutador.
@@ -268,29 +266,35 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
 
   /**
    * Restringe o lutador à faixa de Y permitida e aos limites do mundo.
+   * Usa LevelBounds para limites dinâmicos (fase normal vs arena).
    */
   clampToWalkZone(): void {
     const body = this.body as Phaser.Physics.Arcade.Body;
     if (!body) return;
 
+    const minY = getMinY();
+    const maxY = getMaxY();
+    const minX = getMinX() + 16;
+    const maxX = getMaxX() - 16;
+
     // Limite superior da faixa
-    if (this.y < WALK_ZONE_TOP) {
-      this.y = WALK_ZONE_TOP;
+    if (this.y < minY) {
+      this.y = minY;
       body.setVelocityY(0);
     }
     // Limite inferior da faixa
-    if (this.y > WALK_ZONE_BOTTOM) {
-      this.y = WALK_ZONE_BOTTOM;
+    if (this.y > maxY) {
+      this.y = maxY;
       body.setVelocityY(0);
     }
 
     // Limites horizontais do mundo
-    if (this.x < 16) {
-      this.x = 16;
+    if (this.x < minX) {
+      this.x = minX;
       body.setVelocityX(0);
     }
-    if (this.x > WORLD_WIDTH - 16) {
-      this.x = WORLD_WIDTH - 16;
+    if (this.x > maxX) {
+      this.x = maxX;
       body.setVelocityX(0);
     }
   }

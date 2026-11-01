@@ -10,17 +10,25 @@
  * - Transformação do boss (tween de escala/tint)
  * - Faixa com texto
  * - Emite evento para retomar a GameScene
+ * - Pode ser pulada com ENTER após 1.5s
  */
 
 import Phaser from 'phaser';
 import { GAME_WIDTH, GAME_HEIGHT, EVENTS } from '../config/constants';
 
 export class BossTransitionScene extends Phaser.Scene {
+  private _canSkip: boolean = false;
+  private _isFinished: boolean = false;
+  private _safetyTimer?: Phaser.Time.TimerEvent;
+
   constructor() {
     super({ key: 'BossTransitionScene' });
   }
 
   create(): void {
+    this._canSkip = false;
+    this._isFinished = false;
+
     // Fundo transparente
     this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.5)
       .setDepth(5000);
@@ -29,9 +37,42 @@ export class BossTransitionScene extends Phaser.Scene {
     this.time.delayedCall(200, () => this._flashWhite());
     this.time.delayedCall(600, () => this._showShake());
     this.time.delayedCall(1000, () => this._showTransformation());
-    this.time.delayedCall(2500, () => this._showBanner());
-    this.time.delayedCall(4000, () => this._finish());
+    this.time.delayedCall(3500, () => this._finish());
+
+    // Permite pular após 1.5s
+    this.time.delayedCall(1500, () => {
+      this._canSkip = true;
+      const skipText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT - 20, 'ENTER para pular', {
+        fontSize: '8px',
+        color: '#ffffff',
+        fontFamily: 'monospace',
+      }).setOrigin(0.5).setDepth(5005);
+
+      this.tweens.add({
+        targets: skipText,
+        alpha: 0,
+        duration: 500,
+        yoyo: true,
+        repeat: -1,
+      });
+    });
+
+    // Timeout de segurança (6s) para garantir que a cutscene termine
+    this._safetyTimer = this.time.delayedCall(6000, () => {
+      if (!this._isFinished) {
+        this._finish();
+      }
+    });
+
+    // Input para pular
+    this.input.keyboard?.on('keydown-ENTER', this._onSkip, this);
   }
+
+  private _onSkip = (): void => {
+    if (this._canSkip && !this._isFinished) {
+      this._finish();
+    }
+  };
 
   /**
    * Flash branco.
@@ -96,41 +137,33 @@ export class BossTransitionScene extends Phaser.Scene {
   }
 
   /**
-   * Mostra banner com nome do boss.
-   */
-  private _showBanner(): void {
-    const banner = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 30, 'O AÇOUGUEIRO', {
-      fontSize: '16px',
-      color: '#ff4444',
-      fontFamily: 'monospace',
-      fontStyle: 'bold',
-    }).setOrigin(0.5).setDepth(5004);
-
-    banner.setAlpha(0);
-
-    this.tweens.add({
-      targets: banner,
-      alpha: 1,
-      duration: 300,
-    });
-
-    this.time.delayedCall(1000, () => {
-      this.tweens.add({
-        targets: banner,
-        alpha: 0,
-        duration: 300,
-      });
-    });
-  }
-
-  /**
    * Finaliza a cutscene e retoma a GameScene.
    */
   private _finish(): void {
+    if (this._isFinished) return;
+    this._isFinished = true;
+
+    // Remove listeners
+    this.input.keyboard?.off('keydown-ENTER', this._onSkip, this);
+
+    // Cancela timeout de segurança
+    if (this._safetyTimer) {
+      this._safetyTimer.remove(false);
+      this._safetyTimer = undefined;
+    }
+
     // Emite evento para a GameScene
-    this.game.events.emit('boss:transition:complete');
+    this.game.events.emit(EVENTS.BOSS_TRANSITION_COMPLETE);
 
     // Para a cena
     this.scene.stop();
+  }
+
+  shutdown(): void {
+    // Cleanup
+    this.input.keyboard?.off('keydown-ENTER', this._onSkip, this);
+    if (this._safetyTimer) {
+      this._safetyTimer.remove(false);
+    }
   }
 }

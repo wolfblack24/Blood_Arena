@@ -19,11 +19,12 @@ import {
   FALLING_HAZARD_RADIUS,
   FALLING_HAZARD_SAFE_HEIGHT,
 } from '../config/boss';
+import { EVENTS } from '../config/constants';
 
 export class FallingHazard extends Phaser.GameObjects.Sprite {
   // ── Estado ───────────────────────────────────────────────
   private _isActive: boolean = false;
-  private _z: number = 0; // Altura (eixo Z)
+  private _z: number = 0; // Altura (eixo Z) - positivo = acima do chão
   private _zVelocity: number = 0;
   private _targetX: number = 0;
   private _targetY: number = 0;
@@ -31,13 +32,16 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
   private _isWarning: boolean = false;
   private _isFalling: boolean = false;
   private _hasImpacted: boolean = false;
+  private _deactivateTimer?: Phaser.Time.TimerEvent;
 
   // ── Visuais ──────────────────────────────────────────────
   private _shadow!: Phaser.GameObjects.Ellipse;
-  private _damageArea!: number;
 
   constructor(scene: Phaser.Scene) {
     super(scene, 0, 0, 'hazard_falling');
+    
+    // Adiciona ao display list
+    scene.add.existing(this);
     
     // Cria a sombra de aviso
     this._shadow = scene.add.ellipse(0, 0, 20, 10, 0xff0000, 0.3);
@@ -55,11 +59,17 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
    * Ativa o hazard para uso do pool.
    */
   activate(x: number, y: number): void {
+    // Cancela timer anterior se existir
+    if (this._deactivateTimer) {
+      this._deactivateTimer.remove(false);
+      this._deactivateTimer = undefined;
+    }
+
     this._isActive = true;
     this._targetX = x;
     this._targetY = y;
-    this._z = 200; // Começa bem alto
-    this._zVelocity = -FALLING_HAZARD_FALL_SPEED;
+    this._z = 200; // Começa bem alto (positivo = acima do chão)
+    this._zVelocity = FALLING_HAZARD_FALL_SPEED; // Velocidade positiva para cair
     this._isWarning = true;
     this._isFalling = false;
     this._hasImpacted = false;
@@ -79,6 +89,12 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
    * Desativa o hazard para retorno ao pool.
    */
   deactivate(): void {
+    // Cancela timer se existir
+    if (this._deactivateTimer) {
+      this._deactivateTimer.remove(false);
+      this._deactivateTimer = undefined;
+    }
+
     this._isActive = false;
     this._isWarning = false;
     this._isFalling = false;
@@ -121,11 +137,11 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
 
     // Fase de queda
     if (this._isFalling) {
-      // Aplica gravidade
+      // Aplica gravidade (aumenta velocidade de queda)
       this._zVelocity += FALLING_HAZARD_GRAVITY * dt;
-      this._z -= this._zVelocity * dt;
+      this._z -= this._zVelocity * dt; // z diminui (fica mais perto do chão)
 
-      // Atualiza posição visual
+      // Atualiza posição visual (sprite sobe conforme z diminui)
       this.setPosition(this._targetX, this._targetY - this._z);
 
       // Impacto
@@ -143,7 +159,7 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
    */
   private _onImpact(): void {
     // Emite evento para a GameScene criar efeitos e verificar dano
-    this.scene.game.events.emit('hazard:impact', {
+    this.scene.game.events.emit(EVENTS.HAZARD_IMPACT, {
       x: this._targetX,
       y: this._targetY,
       radius: FALLING_HAZARD_RADIUS,
@@ -154,8 +170,8 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
     // Cria efeito de impacto
     this._createImpactEffect();
 
-    // Desativa após um tempo
-    this.scene.time.delayedCall(500, () => {
+    // Desativa após um tempo (timer cancelável)
+    this._deactivateTimer = this.scene.time.delayedCall(500, () => {
       this.deactivate();
     });
   }
@@ -213,6 +229,9 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
    * Cleanup ao destruir.
    */
   cleanup(): void {
+    if (this._deactivateTimer) {
+      this._deactivateTimer.remove(false);
+    }
     this._shadow.destroy();
     this.destroy();
   }

@@ -200,6 +200,9 @@ export class Player extends Fighter {
     // Não permite mover no ar (mantém momentum)
     if (!this._isGrounded) return;
 
+    // Não permite mover durante dash
+    if (this._isDashing) return;
+
     // Lê input
     let vx = 0;
     let vy = 0;
