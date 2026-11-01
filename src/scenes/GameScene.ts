@@ -344,10 +344,10 @@ export class GameScene extends Phaser.Scene {
     // Define limites da arena
     setArenaBounds();
 
-    // Trava câmera na arena
+    // Configura câmera para arena (follow suave com limites restritivos)
+    // Usa um lerp mais alto para seguir o jogador suavemente sem clipping em knockbacks
     this.cameras.main.setBounds(BOSS_ARENA_X, 0, BOSS_ARENA_WIDTH, WORLD_HEIGHT);
-    this.cameras.main.stopFollow();
-    this.cameras.main.scrollX = BOSS_ARENA_X;
+    this.cameras.main.startFollow(this._player, true, 0.15, 0);
 
     // Posiciona jogador à esquerda
     this._player.setPosition(BOSS_ARENA_X + 50, (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2);
@@ -780,10 +780,13 @@ export class GameScene extends Phaser.Scene {
       if (this._bgNear) this._bgNear.setTilePosition(camScrollX * 0.5, 0);
     }
 
-    // Sistema de ondas
+    // Sistema de ondas e Boss
     if (!this._bossArenaActive && !this._bossTriggered) {
       this._checkWaveTriggers();
       this._checkGoArrowAdvance();
+      
+      // O trigger do boss deve ser avaliado continuamente se as condições forem atendidas
+      this._checkBossTrigger();
     }
 
     // Debug
