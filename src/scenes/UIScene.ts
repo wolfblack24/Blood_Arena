@@ -41,6 +41,10 @@ export class UIScene extends Phaser.Scene {
   private _poiseBarBg!: Phaser.GameObjects.Rectangle;
   private _bossHudContainer!: Phaser.GameObjects.Container;
 
+  // ── Wave HUD ───────────────────────────────────────────
+  private _waveText!: Phaser.GameObjects.Text;
+  private _goArrowText!: Phaser.GameObjects.Text;
+
   // ── Referência ao estado ───────────────────────────────
   private _playerState!: PlayerState;
 
@@ -109,6 +113,24 @@ export class UIScene extends Phaser.Scene {
 
     // ── Boss HUD (inicialmente oculto) ───────────────────
     this._createBossHUD();
+
+    // ── Wave HUD ─────────────────────────────────────────
+    this._waveText = this.add.text(GAME_WIDTH / 2, 60, '', {
+      fontSize: '12px',
+      color: '#ffffff',
+      fontFamily: 'monospace',
+      fontStyle: 'bold',
+    }).setOrigin(0.5, 0).setDepth(1001);
+
+    this._goArrowText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'GO →', {
+      fontSize: '24px',
+      color: '#ffff00',
+      fontFamily: 'monospace',
+      fontStyle: 'bold',
+      stroke: '#884400',
+      strokeThickness: 3,
+    }).setOrigin(0.5).setDepth(1001);
+    this._goArrowText.setVisible(false);
 
     // ── Escuta eventos ───────────────────────────────────
     this._bindEvents();
@@ -274,6 +296,56 @@ export class UIScene extends Phaser.Scene {
     });
   };
 
+  // ── Wave HUD handlers ──────────────────────────────────
+
+  private _onWaveStarted = (_waveIndex: number): void => {
+    this._waveText.setText('ONDA!');
+    this._waveText.setAlpha(1);
+    this.tweens.add({
+      targets: this._waveText,
+      alpha: 0,
+      duration: 1500,
+      delay: 500,
+    });
+  };
+
+  private _onWaveEnemiesLeft = (count: number): void => {
+    if (count > 0) {
+      this._waveText.setText(`RESTANTES: ${count}`);
+      this._waveText.setAlpha(1);
+    } else {
+      this._waveText.setText('');
+    }
+  };
+
+  private _onWaveCleared = (_waveIndex: number): void => {
+    this._waveText.setText('ONDA CONCLUÍDA!');
+    this._waveText.setAlpha(1);
+    this.tweens.add({
+      targets: this._waveText,
+      alpha: 0,
+      duration: 1500,
+      delay: 500,
+    });
+  };
+
+  private _onGoArrow = (active: boolean): void => {
+    if (active) {
+      this._goArrowText.setVisible(true);
+      this._goArrowText.setAlpha(1);
+      this.tweens.add({
+        targets: this._goArrowText,
+        alpha: 0.3,
+        duration: 300,
+        yoyo: true,
+        repeat: -1,
+      });
+    } else {
+      this._goArrowText.setVisible(false);
+      this.tweens.killTweensOf(this._goArrowText);
+    }
+  };
+
   private _bindEvents(): void {
     const events = this.game.events;
     events.on(EVENTS.HP_CHANGED, this._onHPChanged, this);
@@ -290,6 +362,11 @@ export class UIScene extends Phaser.Scene {
     events.on(EVENTS.BOSS_POISE_CHANGED, this._onBossPoiseChanged, this);
     events.on(EVENTS.BOSS_DIED, this._onBossDied, this);
     events.on(EVENTS.BOSS_VICTORY, this._onBossVictory, this);
+    // Wave events
+    events.on(EVENTS.WAVE_STARTED, this._onWaveStarted, this);
+    events.on(EVENTS.WAVE_ENEMIES_LEFT, this._onWaveEnemiesLeft, this);
+    events.on(EVENTS.WAVE_CLEARED, this._onWaveCleared, this);
+    events.on(EVENTS.GO_ARROW, this._onGoArrow, this);
   }
 
   private _unbindEvents(): void {
@@ -308,6 +385,11 @@ export class UIScene extends Phaser.Scene {
     events.off(EVENTS.BOSS_POISE_CHANGED, this._onBossPoiseChanged, this);
     events.off(EVENTS.BOSS_DIED, this._onBossDied, this);
     events.off(EVENTS.BOSS_VICTORY, this._onBossVictory, this);
+    // Wave events
+    events.off(EVENTS.WAVE_STARTED, this._onWaveStarted, this);
+    events.off(EVENTS.WAVE_ENEMIES_LEFT, this._onWaveEnemiesLeft, this);
+    events.off(EVENTS.WAVE_CLEARED, this._onWaveCleared, this);
+    events.off(EVENTS.GO_ARROW, this._onGoArrow, this);
   }
 
   // ═══════════════════════════════════════════════════════

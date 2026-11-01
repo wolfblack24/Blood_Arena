@@ -40,7 +40,7 @@ export class FallingHazard extends Phaser.GameObjects.Sprite {
   constructor(scene: Phaser.Scene) {
     super(scene, 0, 0, 'hazard_falling');
     
-    // Adiciona ao display list
+    // Adiciona ao display list (necessário para ser visível)
     scene.add.existing(this);
     
     // Cria a sombra de aviso

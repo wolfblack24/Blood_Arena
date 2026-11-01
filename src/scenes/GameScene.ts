@@ -4,6 +4,8 @@
  * Cena principal do jogo. Responsável por:
  * - Criar o cenário (parallax em 2 camadas)
  * - Instanciar o jogador (Player) e inimigos (Enemy)
+ * - Sistema de ondas finitas
+ * - Integração com boss (trigger, arena, transição)
  * - Configurar a câmera (follow horizontal, Y fixo)
  * - Definir os limites do mundo
  * - Lançar a UIScene em paralelo
@@ -14,6 +16,8 @@
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
+import { Boss, BossState } from '../entities/Boss';
+import { FallingHazard } from '../entities/FallingHazard';
 import { FighterState } from '../entities/Fighter';
 import { PlayerState } from '../state/PlayerState';
 import {
@@ -33,6 +37,21 @@ import {
   ENEMY_RESPAWN_DELAY,
   EVENTS,
 } from '../config/constants';
+import {
+  BOSS_HP,
+  BOSS_NAME,
+  BOSS_ARENA_X,
+  BOSS_ARENA_WIDTH,
+  FALLING_HAZARD_INTERVAL,
+  FALLING_HAZARD_POOL_SIZE,
+  BOSS_MINION_INTERVAL,
+  BOSS_MINION_COUNT,
+  BOSS_MINION_MAX,
+  BOSS_DEATH_SLOWMO_DURATION,
+  BOSS_DEATH_EXPLOSION_PARTICLES,
+} from '../config/boss';
+import { STAGE_WAVES, ENDLESS_RESPAWN, GO_ARROW_ADVANCE_DISTANCE } from '../config/stage';
+import { setStageBounds, setArenaBounds, lockToCurrentScreen, unlockBounds, isArenaMode } from '../systems/LevelBounds';
 
 export class GameScene extends Phaser.Scene {
   // ── Entidades ──────────────────────────────────────────
@@ -40,10 +59,16 @@ export class GameScene extends Phaser.Scene {
   private _playerState!: PlayerState;
   private _enemies: Enemy[] = [];
   private _enemyGroup!: Phaser.Physics.Arcade.Group;
+  private _boss?: Boss;
+  private _hazards: FallingHazard[] = [];
 
   // ── Parallax ───────────────────────────────────────────
   private _bgFar!: Phaser.GameObjects.TileSprite;
   private _bgNear!: Phaser.GameObjects.TileSprite;
+  private _bgBossFar?: Phaser.GameObjects.TileSprite;
+  private _bgBossNear?: Phaser.GameObjects.TileSprite;
+  private _groundBoss?: Phaser.GameObjects.TileSprite;
+  private _groundNormal?: Phaser.GameObjects.TileSprite;
 
   // ── Partículas de morte ────────────────────────────────
   private _deathParticles!: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -54,15 +79,34 @@ export class GameScene extends Phaser.Scene {
   // ── Debug ──────────────────────────────────────────────
   private _debugMode: boolean = false;
   private _debugGraphics!: Phaser.GameObjects.Graphics;
-  private _debugHitboxes: Phaser.GameObjects.Rectangle[] = [];
 
   // ── Combo ──────────────────────────────────────────────
   private _comboCount: number = 0;
   private _comboTimer: number = 0;
 
+  // ── Sistema de Ondas ───────────────────────────────────
+  private _currentWaveIndex: number = -1;
+  private _waveEnemiesRemaining: number = 0;
+  private _waveTriggered: boolean[] = [];
+  private _goArrowActive: boolean = false;
+  private _goArrowStartX: number = 0;
+
+  // ── Boss ───────────────────────────────────────────────
+  private _bossTriggered: boolean = false;
+  private _bossArenaActive: boolean = false;
+  private _playerInputBlocked: boolean = false;
+  private _hazardTimer?: Phaser.Time.TimerEvent;
+  private _minionTimer?: Phaser.Time.TimerEvent;
+
   // ── Teclas de debug ────────────────────────────────────
   private _f1Key!: Phaser.Input.Keyboard.Key;
-  private _gKey!: Phaser.Input.Keyboard.Key;
+  private _f2Key!: Phaser.Input.Keyboard.Key;
+  private _f3Key!: Phaser.Input.Keyboard.Key;
+  private _f4Key!: Phaser.Input.Keyboard.Key;
+  private _f5Key!: Phaser.Input.Keyboard.Key;
+  private _f6Key!: Phaser.Input.Keyboard.Key;
+  private _f9Key!: Phaser.Input.Keyboard.Key;
+  private _f10Key!: Phaser.Input.Keyboard.Key;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -74,6 +118,7 @@ export class GameScene extends Phaser.Scene {
 
     // ── Define limites do mundo ──────────────────────────
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    setStageBounds();
 
     // ── Cria o cenário ───────────────────────────────────
     this._createBackground();
@@ -84,13 +129,11 @@ export class GameScene extends Phaser.Scene {
     this._player = new Player(this, startX, startY, this._playerState);
 
     // ── Cria inimigos (Object Pool) ──────────────────────
-    // runChildUpdate: false porque a GameScene já chama update manualmente
     this._enemyGroup = this.physics.add.group({
       classType: Enemy,
       runChildUpdate: false,
       maxSize: 10,
     });
-    this._spawnEnemies();
 
     // ── Sistema de partículas de morte ───────────────────
     this._createDeathParticles();
@@ -116,58 +159,390 @@ export class GameScene extends Phaser.Scene {
     // ── Teclas de debug ──────────────────────────────────
     if (this.input.keyboard) {
       this._f1Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F1);
-      this._gKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G);
+      this._f2Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F2);
+      this._f3Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F3);
+      this._f4Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F4);
+      this._f5Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F5);
+      this._f6Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F6);
+      this._f9Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F9);
+      this._f10Key = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F10);
     }
+
+    // ── Inicializa sistema de ondas ──────────────────────
+    this._initWaveSystem();
 
     // ── Eventos ──────────────────────────────────────────
     this.game.events.on(EVENTS.ENEMY_DIED, this._onEnemyDied, this);
+    this.game.events.on(EVENTS.BOSS_PHASE_TRANSITION, this._onBossPhaseTransition, this);
+    this.game.events.on(EVENTS.BOSS_TRANSITION_COMPLETE, this._onBossTransitionComplete, this);
+    this.game.events.on(EVENTS.BOSS_DIED, this._onBossDied, this);
+    this.game.events.on(EVENTS.HAZARD_IMPACT, this._onHazardImpact, this);
     this.events.on('postupdate', this._onPostUpdate, this);
     this.events.on('shutdown', this._onShutdown, this);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // SISTEMA DE ONDAS
+  // ═══════════════════════════════════════════════════════
+
+  private _initWaveSystem(): void {
+    this._currentWaveIndex = -1;
+    this._waveEnemiesRemaining = 0;
+    this._waveTriggered = new Array(STAGE_WAVES.length).fill(false);
+    this._goArrowActive = false;
+  }
+
+  private _checkWaveTriggers(): void {
+    if (this._bossArenaActive || this._bossTriggered) return;
+    if (this._goArrowActive) return; // Aguardando jogador avançar
+
+    const playerX = this._player.x;
+
+    for (let i = 0; i < STAGE_WAVES.length; i++) {
+      if (this._waveTriggered[i]) continue;
+
+      const wave = STAGE_WAVES[i];
+      if (playerX >= wave.triggerX) {
+        this._startWave(i);
+        break;
+      }
+    }
+  }
+
+  private _startWave(waveIndex: number): void {
+    const wave = STAGE_WAVES[waveIndex];
+    this._currentWaveIndex = waveIndex;
+    this._waveTriggered[waveIndex] = true;
+    this._waveEnemiesRemaining = wave.enemies;
+
+    // Trava câmera e limites
+    if (wave.lockCamera) {
+      lockToCurrentScreen(this._player.x);
+      this.cameras.main.stopFollow();
+    }
+
+    // Spawna inimigos pelas bordas
+    this._spawnWaveEnemies(wave.enemies);
+
+    // Emite evento
+    this.game.events.emit(EVENTS.WAVE_STARTED, waveIndex);
+    this.game.events.emit(EVENTS.WAVE_ENEMIES_LEFT, this._waveEnemiesRemaining);
+  }
+
+  private _spawnWaveEnemies(count: number): void {
+    const minX = this._player.x - GAME_WIDTH / 2 + 50;
+    const maxX = this._player.x + GAME_WIDTH / 2 - 50;
+
+    for (let i = 0; i < count; i++) {
+      // Alterna entre borda esquerda e direita
+      const fromLeft = i % 2 === 0;
+      const spawnX = fromLeft ? minX : maxX;
+      const spawnY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
+
+      this._spawnEnemyAt(spawnX, spawnY);
+    }
+  }
+
+  private _onWaveCleared(): void {
+    // Destrava câmera e limites
+    unlockBounds();
+    this.cameras.main.startFollow(this._player, true, CAMERA_LERP, 0);
+
+    // Ativa seta GO
+    this._goArrowActive = true;
+    this._goArrowStartX = this._player.x;
+    this.game.events.emit(EVENTS.GO_ARROW, true);
+    this.game.events.emit(EVENTS.WAVE_CLEARED, this._currentWaveIndex);
+  }
+
+  private _checkGoArrowAdvance(): void {
+    if (!this._goArrowActive) return;
+
+    const advance = this._player.x - this._goArrowStartX;
+    if (advance >= GO_ARROW_ADVANCE_DISTANCE) {
+      this._goArrowActive = false;
+      this.game.events.emit(EVENTS.GO_ARROW, false);
+
+      // Verifica se deve ativar o boss
+      this._checkBossTrigger();
+    }
+  }
+
+  private _checkBossTrigger(): void {
+    if (this._bossTriggered) return;
+
+    // Verifica se todas as ondas foram concluídas
+    const allWavesCleared = this._waveTriggered.every(t => t);
+    if (!allWavesCleared) return;
+
+    // Verifica se não há inimigos vivos
+    const aliveEnemies = this._enemies.filter(e => e.isActive && e.fighterState !== FighterState.Dead);
+    if (aliveEnemies.length > 0) return;
+
+    // Verifica se o jogador está no gatilho do boss
+    const bossTriggerX = BOSS_ARENA_X - 16;
+    if (this._player.x >= bossTriggerX) {
+      this._triggerBossArena();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // BOSS
+  // ═══════════════════════════════════════════════════════
+
+  private _triggerBossArena(): void {
+    this._bossTriggered = true;
+    this._playerInputBlocked = true;
+
+    // Bloqueia input do jogador
+    const body = this._player.body as Phaser.Physics.Arcade.Body;
+    body.setVelocity(0, 0);
+
+    // Emite evento
+    this.game.events.emit(EVENTS.BOSS_ARENA_ENTER);
+
+    // Fade out
+    this.cameras.main.fadeOut(500, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => {
+      this._setupBossArena();
+      this.cameras.main.fadeIn(500, 0, 0, 0);
+    });
+  }
+
+  private _setupBossArena(): void {
+    this._bossArenaActive = true;
+
+    // Esconde cenário da fase
+    if (this._bgFar) this._bgFar.setVisible(false);
+    if (this._bgNear) this._bgNear.setVisible(false);
+    if (this._groundNormal) this._groundNormal.setVisible(false);
+
+    // Mostra cenário da arena
+    if (!this._bgBossFar) {
+      this._bgBossFar = this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_boss_far');
+      this._bgBossFar.setOrigin(0, 0);
+      this._bgBossFar.setScrollFactor(0);
+      this._bgBossFar.setDepth(-90);
+    }
+    this._bgBossFar.setVisible(true);
+
+    if (!this._bgBossNear) {
+      this._bgBossNear = this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_boss_near');
+      this._bgBossNear.setOrigin(0, 0);
+      this._bgBossNear.setScrollFactor(0);
+      this._bgBossNear.setDepth(-80);
+    }
+    this._bgBossNear.setVisible(true);
+
+    if (!this._groundBoss) {
+      this._groundBoss = this.add.tileSprite(0, WALK_ZONE_TOP - 5, BOSS_ARENA_WIDTH, WALK_ZONE_BOTTOM - WALK_ZONE_TOP + 20, 'ground_boss');
+      this._groundBoss.setOrigin(0, 0);
+      this._groundBoss.setDepth(-1);
+    }
+    this._groundBoss.setVisible(true);
+
+    // Define limites da arena
+    setArenaBounds();
+
+    // Trava câmera na arena
+    this.cameras.main.setBounds(BOSS_ARENA_X, 0, BOSS_ARENA_WIDTH, WORLD_HEIGHT);
+    this.cameras.main.stopFollow();
+    this.cameras.main.scrollX = BOSS_ARENA_X;
+
+    // Posiciona jogador à esquerda
+    this._player.setPosition(BOSS_ARENA_X + 50, (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2);
+
+    // Instancia o boss à direita
+    this._boss = new Boss(this, BOSS_ARENA_X + BOSS_ARENA_WIDTH - 80, (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2);
+    this._boss.setPlayer(this._player);
+
+    // Mostra banner do boss
+    this._showBossBanner();
+
+    // Após 2s, inicia a luta
+    this.time.delayedCall(2000, () => {
+      if (this._boss) {
+        this._boss.startFight();
+        this._playerInputBlocked = false;
+      }
+    });
+  }
+
+  private _showBossBanner(): void {
+    const banner = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, BOSS_NAME, {
+      fontSize: '24px',
+      color: '#ff0000',
+      fontFamily: 'monospace',
+      fontStyle: 'bold',
+      stroke: '#440000',
+      strokeThickness: 4,
+    }).setOrigin(0.5).setDepth(1000);
+
+    banner.setAlpha(0);
+    this.tweens.add({
+      targets: banner,
+      alpha: 1,
+      duration: 500,
+      delay: 500,
+    });
+
+    this.time.delayedCall(2000, () => {
+      this.tweens.add({
+        targets: banner,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => banner.destroy(),
+      });
+    });
+  }
+
+  private _onBossPhaseTransition(): void {
+    // Pausa a GameScene e lança a cutscene
+    this.scene.pause();
+    this.scene.launch('BossTransitionScene');
+  }
+
+  private _onBossTransitionComplete(): void {
+    // Retoma a GameScene e atualiza o boss para fase 2
+    this.scene.resume();
+    if (this._boss) {
+      this._boss.enterPhase2();
+    }
+
+    // Inicia hazards e lacaios
+    this._startPhase2Hazards();
+  }
+
+  private _startPhase2Hazards(): void {
+    // Timer de hazards
+    this._hazardTimer = this.time.addEvent({
+      delay: FALLING_HAZARD_INTERVAL,
+      loop: true,
+      callback: () => this._spawnHazard(),
+    });
+
+    // Timer de lacaios
+    this._minionTimer = this.time.addEvent({
+      delay: BOSS_MINION_INTERVAL,
+      loop: true,
+      callback: () => this._spawnMinions(),
+    });
+  }
+
+  private _spawnHazard(): void {
+    if (!this._bossArenaActive || !this._boss || this._boss.bossState === BossState.Dead) return;
+
+    // Encontra hazard inativo no pool
+    let hazard = this._hazards.find(h => !h.isActive);
+    if (!hazard) {
+      if (this._hazards.length >= FALLING_HAZARD_POOL_SIZE) return;
+      hazard = new FallingHazard(this);
+      this._hazards.push(hazard);
+    }
+
+    // Posição aleatória na arena, perto do jogador mas não exatamente sobre ele
+    const playerX = this._player.x;
+    const offsetX = Phaser.Math.Between(-80, 80);
+    const hazardX = Phaser.Math.Clamp(playerX + offsetX, BOSS_ARENA_X + 20, BOSS_ARENA_X + BOSS_ARENA_WIDTH - 20);
+    const hazardY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
+
+    hazard.activate(hazardX, hazardY);
+  }
+
+  private _spawnMinions(): void {
+    if (!this._bossArenaActive || !this._boss || this._boss.bossState === BossState.Dead) return;
+
+    const aliveEnemies = this._enemies.filter(e => e.isActive && e.fighterState !== FighterState.Dead);
+    if (aliveEnemies.length >= BOSS_MINION_MAX) return;
+
+    const count = Math.min(BOSS_MINION_COUNT, BOSS_MINION_MAX - aliveEnemies.length);
+    for (let i = 0; i < count; i++) {
+      const spawnX = Phaser.Math.Between(BOSS_ARENA_X + 20, BOSS_ARENA_X + BOSS_ARENA_WIDTH - 20);
+      const spawnY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
+      this._spawnEnemyAt(spawnX, spawnY);
+    }
+  }
+
+  private _onHazardImpact(data: { x: number; y: number; radius: number; damage: number; safeHeight: number }): void {
+    if (!this._bossArenaActive) return;
+
+    // Verifica se o jogador está na área de dano
+    const playerX = this._player.x;
+    const playerY = this._player.groundY;
+    const playerZ = this._player.jumpHeight;
+
+    const dx = playerX - data.x;
+    const dy = playerY - data.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // Verifica se está dentro do raio E não está pulando alto o suficiente
+    if (distance <= data.radius && playerZ < data.safeHeight) {
+      this._player.takePlayerDamage(data.damage, 0, false);
+      this.cameras.main.shake(100, 0.005);
+    }
+  }
+
+  private _onBossDied(): void {
+    if (!this._boss) return;
+
+    // Para timers
+    if (this._hazardTimer) {
+      this._hazardTimer.remove(false);
+      this._hazardTimer = undefined;
+    }
+    if (this._minionTimer) {
+      this._minionTimer.remove(false);
+      this._minionTimer = undefined;
+    }
+
+    // Remove lacaios
+    for (const enemy of this._enemies) {
+      if (enemy.isActive) {
+        enemy.takeEnemyDamage(9999, 0, true);
+      }
+    }
+
+    // Slow motion
+    this.time.timeScale = 0.25;
+    this.physics.world.timeScale = 0.25;
+
+    // Explosão de partículas
+    if (this._deathParticles && this._boss) {
+      this._deathParticles.setPosition(this._boss.x, this._boss.y);
+      this._deathParticles.explode(BOSS_DEATH_EXPLOSION_PARTICLES);
+    }
+
+    // Screen shake
+    this.cameras.main.shake(500, 0.02);
+
+    // Após slow motion, mostra vitória
+    this.time.delayedCall(BOSS_DEATH_SLOWMO_DURATION, () => {
+      this.time.timeScale = 1;
+      this.physics.world.timeScale = 1;
+      this.game.events.emit(EVENTS.BOSS_VICTORY);
+    });
   }
 
   // ═══════════════════════════════════════════════════════
   // INIMIGOS
   // ═══════════════════════════════════════════════════════
 
-  private _spawnEnemies(): void {
-    const positions = [
-      { x: 300, y: 160 },
-      { x: 500, y: 180 },
-      { x: 700, y: 150 },
-    ];
-
-    for (const pos of positions) {
-      this._spawnEnemyAt(pos.x, pos.y);
-    }
-  }
-
-  /**
-   * Spawna um inimigo na posição especificada usando Object Pooling.
-   */
   private _spawnEnemyAt(x: number, y: number): void {
-    // Primeiro, tenta encontrar um inimigo inativo no pool para reutilizar
     let enemy = this._findInactiveEnemy();
 
     if (enemy) {
-      // Reutiliza o inimigo inativo
       enemy.resetEnemy(x, y);
     } else if (this._enemies.length < 10) {
-      // Se não há inativos e o pool não está cheio, cria um novo
       enemy = new Enemy(this, x, y, this._playerState);
       this._enemyGroup.add(enemy);
       this._enemies.push(enemy);
     } else {
-      // Pool cheio e nenhum inativo: ignora o spawn
       return;
     }
 
-    // Injeta dependências
     this._initEnemy(enemy);
   }
 
-  /**
-   * Encontra um inimigo inativo no pool para reutilizar.
-   */
   private _findInactiveEnemy(): Enemy | null {
     for (const enemy of this._enemies) {
       if (!enemy.isActive) {
@@ -177,16 +552,10 @@ export class GameScene extends Phaser.Scene {
     return null;
   }
 
-  /**
-   * Inicializa um inimigo com as dependências necessárias.
-   * Registra o overlap uma única vez por instância.
-   */
   private _initEnemy(enemy: Enemy): void {
-    // Injeta o jogador e o playerState
     enemy.setPlayer(this._player);
     enemy.setPlayerState(this._playerState);
 
-    // Registra o overlap hitbox-do-inimigo → jogador UMA VEZ por instância
     if (!enemy.overlapRegistered) {
       this.physics.add.overlap(
         enemy.getHitboxZone(),
@@ -204,8 +573,6 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _setupCombatOverlaps(): void {
-    // Hitbox do jogador vs grupo de inimigos
-    // (overlap registrado uma vez para o grupo todo)
     this.physics.add.overlap(
       this._player.getHitboxZone(),
       this._enemyGroup,
@@ -213,10 +580,6 @@ export class GameScene extends Phaser.Scene {
       undefined,
       this
     );
-
-    // Hitbox dos inimigos vs jogador é registrada individualmente em _initEnemy
-    // para garantir que cada instância tenha seu overlap registrado UMA VEZ,
-    // inclusive quando reutilizada pelo pool.
   }
 
   private _onPlayerHitEnemy(playerHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
@@ -224,35 +587,22 @@ export class GameScene extends Phaser.Scene {
     const attack = this._player.getCurrentAttack();
     if (!attack) return;
 
-    // Valida se pode atingir
     if (!this._player.canHitTarget(enemy)) return;
 
-    // Registra hit
     this._player.registerHit(enemy);
 
-    // Calcula knockback
     const knockbackDir = this._player.facingRight ? 1 : -1;
     const knockbackX = knockbackDir * attack.knockback;
 
-    // Aplica dano
     const died = enemy.takeEnemyDamage(attack.damage, knockbackX, attack.knockdown);
 
-    // Hitstop
     this._hitstopFrames = attack.hitstop;
-
-    // Screen shake
     this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
-
-    // Flash de impacto
     this._flashImpact(enemy.x, enemy.y - 16);
 
-    // Combo
     this._comboCount++;
     this._comboTimer = this.time.now + 2000;
     this.game.events.emit(EVENTS.COMBO_CHANGED, this._comboCount);
-
-    // Som (placeholder)
-    this._playSfx('hit');
   }
 
   private _onEnemyHitPlayer(enemyHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, playerObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
@@ -260,37 +610,24 @@ export class GameScene extends Phaser.Scene {
     const attack = enemy.getCurrentAttack();
     if (!attack) return;
 
-    // Valida se pode atingir
     if (this._player.isInvulnerable()) return;
     if (this._player.fighterState === FighterState.Dead || this._player.fighterState === FighterState.Knockdown) return;
 
-    // Valida profundidade usando groundY (posição real do chão)
     const laneDiff = Math.abs(this._player.groundY - enemy.groundY);
     const zDiff = Math.abs(this._player.jumpHeight - enemy.jumpHeight);
     if (laneDiff > LANE_TOLERANCE || zDiff > attack.zTolerance) return;
 
-    // Calcula knockback
     const knockbackDir = enemy.facingRight ? 1 : -1;
     const knockbackX = knockbackDir * attack.knockback;
 
-    // Aplica dano ao jogador
     this._player.takePlayerDamage(attack.damage, knockbackX, attack.knockdown);
 
-    // Hitstop
     this._hitstopFrames = attack.hitstop;
-
-    // Screen shake
     this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
-
-    // Flash
     this._flashImpact(this._player.x, this._player.y - 16);
-
-    // Som
-    this._playSfx('hurt');
   }
 
   private _flashImpact(x: number, y: number): void {
-    // Cria uma faísca simples (retângulo branco)
     const spark = this.add.rectangle(x, y, 8, 8, 0xffffff);
     spark.setDepth(999);
 
@@ -303,17 +640,29 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private _playSfx(_name: string): void {
-    // Placeholder para sons
-    // Quando houver assets de áudio:
-    // this.sound.play(name);
-  }
-
   private _onEnemyDied(_enemy: Enemy, x: number, y: number): void {
-    // Emite partículas de morte
     if (this._deathParticles) {
       this._deathParticles.setPosition(x, y);
       this._deathParticles.explode(10);
+    }
+
+    // Respawn infinito apenas se ENDLESS_RESPAWN estiver ativo (debug)
+    if (ENDLESS_RESPAWN && !this._bossArenaActive) {
+      this.time.delayedCall(ENEMY_RESPAWN_DELAY, () => {
+        const randomX = Phaser.Math.Between(200, WORLD_WIDTH - 200);
+        const randomY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
+        this._spawnEnemyAt(randomX, randomY);
+      });
+    }
+
+    // Atualiza contador de onda
+    if (this._currentWaveIndex >= 0 && this._waveEnemiesRemaining > 0) {
+      this._waveEnemiesRemaining--;
+      this.game.events.emit(EVENTS.WAVE_ENEMIES_LEFT, this._waveEnemiesRemaining);
+
+      if (this._waveEnemiesRemaining <= 0) {
+        this._onWaveCleared();
+      }
     }
 
     // Reseta combo se não houver mais inimigos vivos
@@ -322,28 +671,15 @@ export class GameScene extends Phaser.Scene {
       this._comboCount = 0;
       this.game.events.emit(EVENTS.COMBO_CHANGED, 0);
     }
-
-    // Ciclo de respawn (demonstra Object Pooling)
-    this.time.delayedCall(ENEMY_RESPAWN_DELAY, () => {
-      // Spawna em posição aleatória dentro da zona de walk
-      const randomX = Phaser.Math.Between(200, WORLD_WIDTH - 200);
-      const randomY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
-      this._spawnEnemyAt(randomX, randomY);
-    });
   }
 
-  /**
-   * Cria o sistema de partículas de morte.
-   */
   private _createDeathParticles(): void {
-    // Cria a textura da partícula (um pequeno quadrado vermelho)
     const particleGfx = this.add.graphics();
     particleGfx.fillStyle(0xff2222, 1);
     particleGfx.fillRect(0, 0, 4, 4);
     particleGfx.generateTexture('death_particle', 4, 4);
     particleGfx.destroy();
 
-    // Cria o emitter de partículas
     this._deathParticles = this.add.particles(0, 0, 'death_particle', {
       speed: { min: 50, max: 150 },
       angle: { min: 0, max: 360 },
@@ -361,29 +697,25 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _createBackground(): void {
-    // Céu
     const skyGfx = this.add.graphics();
     skyGfx.fillGradientStyle(COLOR_SKY_TOP, COLOR_SKY_TOP, COLOR_SKY_BOTTOM, COLOR_SKY_BOTTOM, 1);
     skyGfx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
     skyGfx.setScrollFactor(0);
     skyGfx.setDepth(-100);
 
-    // Camada distante
     this._bgFar = this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_far_tex');
     this._bgFar.setOrigin(0, 0);
     this._bgFar.setScrollFactor(0);
     this._bgFar.setDepth(-90);
 
-    // Camada próxima
     this._bgNear = this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_near_tex');
     this._bgNear.setOrigin(0, 0);
     this._bgNear.setScrollFactor(0);
     this._bgNear.setDepth(-80);
 
-    // Chão
-    const ground = this.add.tileSprite(0, WALK_ZONE_TOP - 5, WORLD_WIDTH, WALK_ZONE_BOTTOM - WALK_ZONE_TOP + 20, 'ground_tex');
-    ground.setOrigin(0, 0);
-    ground.setDepth(-1);
+    this._groundNormal = this.add.tileSprite(0, WALK_ZONE_TOP - 5, WORLD_WIDTH, WALK_ZONE_BOTTOM - WALK_ZONE_TOP + 20, 'ground_tex');
+    this._groundNormal.setOrigin(0, 0);
+    this._groundNormal.setDepth(-1);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -409,17 +741,29 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   update(time: number, delta: number): void {
-    // Hitstop: congela a simulação
     if (this._hitstopFrames > 0) {
       this._hitstopFrames--;
       return;
     }
 
     // Atualiza entidades
-    this._player.update(time, delta);
+    if (!this._playerInputBlocked) {
+      this._player.update(time, delta);
+    }
+
     for (const enemy of this._enemies) {
       if (enemy.isActive) {
         enemy.update(time, delta);
+      }
+    }
+
+    if (this._boss) {
+      this._boss.update(time, delta);
+    }
+
+    for (const hazard of this._hazards) {
+      if (hazard.isActive) {
+        hazard.update(time, delta);
       }
     }
 
@@ -430,9 +774,17 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Parallax
-    const camScrollX = this.cameras.main.scrollX;
-    this._bgFar.setTilePosition(camScrollX * 0.2, 0);
-    this._bgNear.setTilePosition(camScrollX * 0.5, 0);
+    if (!this._bossArenaActive) {
+      const camScrollX = this.cameras.main.scrollX;
+      if (this._bgFar) this._bgFar.setTilePosition(camScrollX * 0.2, 0);
+      if (this._bgNear) this._bgNear.setTilePosition(camScrollX * 0.5, 0);
+    }
+
+    // Sistema de ondas
+    if (!this._bossArenaActive && !this._bossTriggered) {
+      this._checkWaveTriggers();
+      this._checkGoArrowAdvance();
+    }
 
     // Debug
     this._handleDebugInput();
@@ -450,16 +802,52 @@ export class GameScene extends Phaser.Scene {
   private _handleDebugInput(): void {
     if (!this.input.keyboard) return;
 
-    // F1: toggle debug
     if (Phaser.Input.Keyboard.JustDown(this._f1Key)) {
       this._debugMode = !this._debugMode;
     }
 
-    // G: spawna um novo inimigo em posição aleatória (para testar pooling)
-    if (Phaser.Input.Keyboard.JustDown(this._gKey)) {
-      const randomX = Phaser.Math.Between(200, WORLD_WIDTH - 200);
-      const randomY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
-      this._spawnEnemyAt(randomX, randomY);
+    // F2: reinicia a luta do boss
+    if (Phaser.Input.Keyboard.JustDown(this._f2Key) && this._boss) {
+      this._boss.cleanup();
+      this._boss = new Boss(this, BOSS_ARENA_X + BOSS_ARENA_WIDTH - 80, (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2);
+      this._boss.setPlayer(this._player);
+      this._boss.startFight();
+    }
+
+    // F3: boss a 51% de HP
+    if (Phaser.Input.Keyboard.JustDown(this._f3Key) && this._boss) {
+      const targetHP = Math.floor(BOSS_HP * 0.51);
+      (this._boss as any)._hp = targetHP;
+      this.game.events.emit(EVENTS.BOSS_HP_CHANGED, targetHP, BOSS_HP);
+    }
+
+    // F4: congela IA do boss
+    if (Phaser.Input.Keyboard.JustDown(this._f4Key) && this._boss) {
+      this._boss.toggleAIFreeze();
+    }
+
+    // F9: pula todas as ondas e vai ao boss
+    if (Phaser.Input.Keyboard.JustDown(this._f9Key) && !this._bossTriggered) {
+      // Marca todas as ondas como triggeradas
+      for (let i = 0; i < STAGE_WAVES.length; i++) {
+        this._waveTriggered[i] = true;
+      }
+      this._waveEnemiesRemaining = 0;
+      this._goArrowActive = false;
+
+      // Move jogador para o gatilho do boss
+      this._player.setPosition(BOSS_ARENA_X - 50, (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2);
+      unlockBounds();
+      this.cameras.main.startFollow(this._player, true, CAMERA_LERP, 0);
+    }
+
+    // F10: mata todos os inimigos da onda atual
+    if (Phaser.Input.Keyboard.JustDown(this._f10Key)) {
+      for (const enemy of this._enemies) {
+        if (enemy.isActive && enemy.fighterState !== FighterState.Dead) {
+          enemy.takeEnemyDamage(9999, 0, true);
+        }
+      }
     }
   }
 
@@ -489,11 +877,10 @@ export class GameScene extends Phaser.Scene {
       playerPhysBody.height
     );
 
-    // Hitboxes e hurtboxes dos inimigos
+    // Inimigos
     for (const enemy of this._enemies) {
       if (!enemy.isActive || enemy.fighterState === FighterState.Dead) continue;
 
-      // Hitbox
       const enemyHitbox = enemy.getHitboxZone();
       const enemyHitboxBody = enemyHitbox.body as Phaser.Physics.Arcade.Body;
       if (enemyHitboxBody.enable) {
@@ -506,7 +893,6 @@ export class GameScene extends Phaser.Scene {
         );
       }
 
-      // Hurtbox
       const enemyPhysBody = enemy.body as Phaser.Physics.Arcade.Body;
       this._debugGraphics.lineStyle(1, 0xff8800, 1);
       this._debugGraphics.strokeRect(
@@ -516,10 +902,27 @@ export class GameScene extends Phaser.Scene {
         enemyPhysBody.height
       );
     }
+
+    // Boss
+    if (this._boss) {
+      for (const hurtbox of this._boss.getActiveHurtboxes()) {
+        const zone = hurtbox.zone;
+        const body = hurtbox.body;
+        if (body.enable) {
+          this._debugGraphics.lineStyle(1, 0xff00ff, 1);
+          this._debugGraphics.strokeRect(
+            zone.x - body.width / 2,
+            zone.y - body.height / 2,
+            body.width,
+            body.height
+          );
+        }
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════
-  // POSTUPDATE (via evento)
+  // POSTUPDATE
   // ═══════════════════════════════════════════════════════
 
   private _onPostUpdate = (): void => {
@@ -529,6 +932,9 @@ export class GameScene extends Phaser.Scene {
         enemy.postPhysicsUpdate();
       }
     }
+    if (this._boss) {
+      this._boss.postPhysicsUpdate();
+    }
   };
 
   // ═══════════════════════════════════════════════════════
@@ -536,15 +942,32 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _onShutdown = (): void => {
-    // Remove listeners
     this.game.events.off(EVENTS.ENEMY_DIED, this._onEnemyDied, this);
+    this.game.events.off(EVENTS.BOSS_PHASE_TRANSITION, this._onBossPhaseTransition, this);
+    this.game.events.off(EVENTS.BOSS_TRANSITION_COMPLETE, this._onBossTransitionComplete, this);
+    this.game.events.off(EVENTS.BOSS_DIED, this._onBossDied, this);
+    this.game.events.off(EVENTS.HAZARD_IMPACT, this._onHazardImpact, this);
     this.events.off('postupdate', this._onPostUpdate, this);
 
-    // Limpa entidades
+    if (this._hazardTimer) {
+      this._hazardTimer.remove(false);
+    }
+    if (this._minionTimer) {
+      this._minionTimer.remove(false);
+    }
+
     this._player?.cleanup();
     for (const enemy of this._enemies) {
       enemy?.cleanup();
     }
+    if (this._boss) {
+      this._boss.cleanup();
+    }
+    for (const hazard of this._hazards) {
+      hazard?.cleanup();
+    }
+
+    setStageBounds();
   };
 
   // ═══════════════════════════════════════════════════════

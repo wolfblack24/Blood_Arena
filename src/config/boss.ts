@@ -7,11 +7,11 @@
 
 // ── Identificação ──────────────────────────────────────────
 export const BOSS_NAME = 'O AÇOUGUEIRO';
-export const BOSS_TRIGGER_X = 1500; // Posição X para iniciar a luta
 
 // ── Arena ──────────────────────────────────────────────────
-export const BOSS_ARENA_X = 1400; // Início da arena
+// A arena fica no final do mundo (WORLD_WIDTH = 1600)
 export const BOSS_ARENA_WIDTH = 384; // Largura da arena (1 tela)
+export const BOSS_ARENA_X = 1600 - BOSS_ARENA_WIDTH; // 1216
 export const BOSS_ARENA_Y_TOP = 140;
 export const BOSS_ARENA_Y_BOTTOM = 210;
 

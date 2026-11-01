@@ -2,19 +2,36 @@
  * MainMenuScene.ts
  * ─────────────────────────────────────────────────────────
  * Tela principal do jogo.
+ * Suporta parâmetro ?boss=1 na URL para pular direto para o boss.
  */
 
 import Phaser from 'phaser';
-import { GAME_WIDTH, GAME_HEIGHT } from '../config/constants';
+import { GAME_WIDTH, GAME_HEIGHT, EVENTS } from '../config/constants';
+import { setArenaBounds } from '../systems/LevelBounds';
+import { BOSS_ARENA_X, BOSS_ARENA_WIDTH, BOSS_HP } from '../config/boss';
+import { WALK_ZONE_TOP, WALK_ZONE_BOTTOM } from '../config/constants';
 
 export class MainMenuScene extends Phaser.Scene {
   private _blinkEvent?: Phaser.Time.TimerEvent;
+  private _skipToBoss: boolean = false;
 
   constructor() {
     super({ key: 'MainMenuScene' });
   }
 
+  init(): void {
+    // Verifica se deve pular para o boss
+    const urlParams = new URLSearchParams(window.location.search);
+    this._skipToBoss = urlParams.get('boss') === '1';
+  }
+
   create(): void {
+    // Se deve pular para o boss, vai direto para a GameScene
+    if (this._skipToBoss) {
+      this._startBossFight();
+      return;
+    }
+
     const cx = GAME_WIDTH / 2;
     const cy = GAME_HEIGHT / 2;
 
@@ -56,11 +73,11 @@ export class MainMenuScene extends Phaser.Scene {
     });
 
     // Controles
-    this.add.text(cx, cy + 80, 'WASD: Mover | ESPAÇO: Pular | J: Atacar', {
+    this.add.text(cx, cy + 80, 'WASD: Mover | ESPAÇO: Pular | J: Atacar | K: Esquivar', {
       fontSize: '7px', color: '#666666', fontFamily: 'monospace',
     }).setOrigin(0.5);
 
-    this.add.text(cx, cy + 90, 'H: Debug dano | G: Inimigos agressivos | F1: Hitboxes', {
+    this.add.text(cx, cy + 90, 'H: Debug dano | F1: Hitboxes | F9: Pular ondas | F10: Matar inimigos', {
       fontSize: '7px', color: '#555555', fontFamily: 'monospace',
     }).setOrigin(0.5);
 
@@ -68,6 +85,33 @@ export class MainMenuScene extends Phaser.Scene {
     this.input.keyboard?.once('keydown-ENTER', () => {
       this._blinkEvent?.destroy();
       this.scene.start('GameScene');
+    });
+  }
+
+  /**
+   * Inicia direto na arena do boss (para ?boss=1).
+   */
+  private _startBossFight(): void {
+    // Inicia a GameScene
+    this.scene.start('GameScene');
+
+    // Aguarda a GameScene criar e então força a transição para o boss
+    this.time.delayedCall(100, () => {
+      const gameScene = this.scene.get('GameScene') as any;
+      if (gameScene) {
+        // Marca todas as ondas como concluídas
+        for (let i = 0; i < 10; i++) {
+          gameScene._waveTriggered[i] = true;
+        }
+        gameScene._waveEnemiesRemaining = 0;
+        gameScene._goArrowActive = false;
+
+        // Move jogador para o gatilho do boss
+        gameScene._player.setPosition(BOSS_ARENA_X - 50, (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2);
+
+        // Dispara o boss diretamente
+        gameScene._triggerBossArena();
+      }
     });
   }
 }

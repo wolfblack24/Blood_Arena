@@ -104,4 +104,8 @@ export const EVENTS = {
   BOSS_TAIL_BROKEN: 'boss:tail:broken',
   HAZARD_IMPACT: 'hazard:impact',
   GO_ARROW: 'go:arrow',
+  // Wave events
+  WAVE_STARTED: 'wave:started',
+  WAVE_ENEMIES_LEFT: 'wave:enemies:left',
+  WAVE_CLEARED: 'wave:cleared',
 } as const;

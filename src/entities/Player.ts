@@ -61,7 +61,6 @@ export class Player extends Fighter {
   private _comboIndex: number = 0;
   private _lastAttackEndTime: number = 0;
   private _hitTargets: Set<Fighter> = new Set();
-  private _canStartNewCombo: boolean = true;
   private _attackTimers?: Phaser.Time.TimerEvent[];
 
   // ── Buffer de input ────────────────────────────────────
@@ -168,11 +167,6 @@ export class Player extends Fighter {
 
   private _processInput(_delta: number): void {
     if (this._fighterState === FighterState.Dead) return;
-
-    // Resetar a permissão de novo combo se a tecla de ataque for solta
-    if (!this._attackKey.isDown) {
-      this._canStartNewCombo = true;
-    }
 
     // Captura buffer de input para ataque
     if (Phaser.Input.Keyboard.JustDown(this._attackKey)) {
@@ -301,9 +295,13 @@ export class Player extends Fighter {
       dashDirY *= norm;
     }
 
+    // Calcula velocidade para percorrer ~64px em DASH_DURATION
+    const dashDistance = 64; // pixels
+    const dashSpeed = dashDistance / (DASH_DURATION / 1000); // pixels/seg
+
     // Aplica velocidade
     const body = this.body as Phaser.Physics.Arcade.Body;
-    body.setVelocity(dashDirX * DASH_SPEED, dashDirY * DASH_SPEED);
+    body.setVelocity(dashDirX * dashSpeed, dashDirY * dashSpeed);
 
     // Concede i-frames
     this.grantInvulnerability(DASH_IFRAMES_DURATION);
@@ -327,6 +325,13 @@ export class Player extends Fighter {
   private _handleAttack(): void {
     const now = this.scene.time.now;
 
+    // Não pode atacar em Hurt, Knockdown ou Dead
+    if (this._fighterState === FighterState.Hurt ||
+        this._fighterState === FighterState.Knockdown ||
+        this._fighterState === FighterState.Dead) {
+      return;
+    }
+
     // Verifica buffer de input
     if (now > this._attackBufferTime) return;
 
@@ -337,6 +342,8 @@ export class Player extends Fighter {
         const elapsed = now - this._attackStartTime;
         
         if (elapsed < totalTime && elapsed > totalTime - COMBO_WINDOW) {
+            // Avança o combo com módulo (3º golpe volta ao 1º)
+            this._comboIndex = (this._comboIndex + 1) % PLAYER_ATTACKS.length;
             // CANCELA OS TIMERS ANTERIORES antes de iniciar o próximo ataque
             this._cancelAttackTimers();
             this._startAttack();
@@ -346,7 +353,8 @@ export class Player extends Fighter {
 
     // Verifica janela de combo
     if (now - this._lastAttackEndTime < COMBO_WINDOW) {
-        this._comboIndex = Math.min(this._comboIndex + 1, PLAYER_ATTACKS.length - 1);
+        // Avança o combo com módulo (3º golpe volta ao 1º)
+        this._comboIndex = (this._comboIndex + 1) % PLAYER_ATTACKS.length;
     } else {
         this._comboIndex = 0;
     }
@@ -372,6 +380,12 @@ export class Player extends Fighter {
 
     // Muda estado
     this.changeState(FighterState.Attack);
+
+    // Zera velocidade no chão (deslize zero), mantém momentum no ar
+    if (this._isGrounded) {
+        const body = this.body as Phaser.Physics.Arcade.Body;
+        body.setVelocity(0, 0);
+    }
 
     // Agenda ativação da hitbox
     const activateTimer = this.scene.time.delayedCall(attackData.startup, () => {
