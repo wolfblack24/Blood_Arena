@@ -27,6 +27,10 @@ import {
   BOSS_PHASE2_DECISION_DELAY,
   BOSS_PHASE_TRANSITION_HP,
   BOSS_LANE_TOLERANCE,
+  BOSS_ATTACK_RADIUS,
+  BOSS_APPROACH_SPEED,
+  BOSS_ARENA_X,
+  BOSS_ARENA_WIDTH,
   STAGGER_DAMAGE_MULT,
 } from '../config/boss';
 import { EVENTS } from '../config/constants';
@@ -261,8 +265,47 @@ export class Boss extends Fighter {
    */
   postPhysicsUpdate(): void {
     this.undoJumpVisualOffset();
-    this.clampToWalkZone();
+    this._clampToArena();
     this.applyJumpVisualOffset();
+  }
+
+  /**
+   * Restringe o Boss aos limites da arena (sobrescreve clampToWalkZone do Fighter).
+   * Isso evita que o Boss fique travado na parede devido a cálculos de bounds incorretos.
+   */
+  private _clampToArena(): void {
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    if (!body) return;
+
+    // Limites da arena do boss
+    const arenaMinX = BOSS_ARENA_X + 20; // Margem de segurança
+    const arenaMaxX = BOSS_ARENA_X + BOSS_ARENA_WIDTH - 20;
+    const arenaMinY = 140; // WALK_ZONE_TOP
+    const arenaMaxY = 210; // WALK_ZONE_BOTTOM
+
+    // Limite esquerdo da arena
+    if (this.x < arenaMinX) {
+      this.x = arenaMinX;
+      body.setVelocityX(0);
+    }
+    
+    // Limite direito da arena
+    if (this.x > arenaMaxX) {
+      this.x = arenaMaxX;
+      body.setVelocityX(0);
+    }
+    
+    // Limite superior da faixa
+    if (this.y < arenaMinY) {
+      this.y = arenaMinY;
+      body.setVelocityY(0);
+    }
+    
+    // Limite inferior da faixa
+    if (this.y > arenaMaxY) {
+      this.y = arenaMaxY;
+      body.setVelocityY(0);
+    }
   }
 
   // ═══════════════════════════════════════════════════════
@@ -270,12 +313,39 @@ export class Boss extends Fighter {
   // ═══════════════════════════════════════════════════════
 
   private _updateAI(): void {
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    
+    // DEBUG: Log do estado e velocidade
+    if (this._bossState === BossState.Idle || this._bossState === BossState.Recover) {
+      console.log(`[Boss AI] State: ${this._bossState}, Velocity: (${body.velocity.x.toFixed(2)}, ${body.velocity.y.toFixed(2)}), Position: (${this.x.toFixed(2)}, ${this.y.toFixed(2)})`);
+    }
+
     // Não decide se estiver ocupado
     if (this._bossState === BossState.Telegraph ||
         this._bossState === BossState.Attacking ||
         this._bossState === BossState.Stagger ||
-        this._bossState === BossState.Transition) {
+        this._bossState === BossState.Transition ||
+        this._bossState === BossState.Dead) {
       return;
+    }
+
+    // Lógica de aproximação: se está em Idle ou Recover e o jogador está fora do attackRadius
+    if ((this._bossState === BossState.Idle || this._bossState === BossState.Recover) && this._player) {
+      const dx = this._player.x - this.x;
+      const distance = Math.abs(dx);
+      
+      // Se o jogador está fora do attackRadius, aproxima-se
+      if (distance > BOSS_ATTACK_RADIUS) {
+        // Define a direção (facing)
+        this.setFacing(dx > 0);
+        
+        // Aplica velocidade de aproximação
+        const direction = dx > 0 ? 1 : -1;
+        body.setVelocityX(BOSS_APPROACH_SPEED * direction);
+      } else {
+        // Parou de se aproximar, zera velocidade X
+        body.setVelocityX(0);
+      }
     }
 
     // Se não tem decision timer, cria um
@@ -293,12 +363,28 @@ export class Boss extends Fighter {
    * Decide qual ataque usar.
    */
   private _makeDecision(): void {
-    if (!this._player) return;
-    if (this._bossState !== BossState.Idle && this._bossState !== BossState.Recover) return;
+    if (!this._player) {
+      console.log('[Boss AI] _makeDecision: jogador não definido');
+      return;
+    }
+    if (this._bossState !== BossState.Idle && this._bossState !== BossState.Recover) {
+      console.log(`[Boss AI] _makeDecision: estado inválido (${this._bossState})`);
+      return;
+    }
 
-    // Escolhe ataque aleatório ponderado
-    const attackType = this._chooseAttack();
-    this._startAttack(attackType);
+    const dx = this._player.x - this.x;
+    const distance = Math.abs(dx);
+    console.log(`[Boss AI] _makeDecision: distância do jogador = ${distance.toFixed(2)}, attackRadius = ${BOSS_ATTACK_RADIUS}`);
+
+    // Só ataca se estiver dentro do attackRadius
+    if (distance <= BOSS_ATTACK_RADIUS) {
+      // Escolhe ataque aleatório ponderado
+      const attackType = this._chooseAttack();
+      console.log(`[Boss AI] Iniciando ataque: ${attackType}`);
+      this._startAttack(attackType);
+    } else {
+      console.log('[Boss AI] Jogador muito longe, continuando aproximação');
+    }
   }
 
   /**
@@ -333,6 +419,10 @@ export class Boss extends Fighter {
   private _startAttack(type: BossAttackType): void {
     const attackData = BOSS_ATTACKS[type];
     this._currentAttack = attackData;
+
+    // Para o movimento de aproximação antes de atacar
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.setVelocityX(0);
 
     // Telegraph
     this._bossState = BossState.Telegraph;
@@ -625,8 +715,20 @@ export class Boss extends Fighter {
    * Inicia a luta (sai do intro).
    */
   startFight(): void {
+    // Garante que o corpo físico está ativo
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    if (body) {
+      body.enable = true;
+      body.setVelocity(0, 0);
+    }
+    
+    // Define o estado para Idle
     this._bossState = BossState.Idle;
+    
+    // Ativa todas as hurtboxes
     this._setAllHurtboxesActive(true);
+    
+    console.log('[Boss] startFight() chamado - Boss pronto para lutar');
   }
 
   /**

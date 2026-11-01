@@ -67,6 +67,8 @@ export const BOSS_HURTBOXES: BossHurtboxData[] = [
 
 // ── Tolerâncias ────────────────────────────────────────────
 export const BOSS_LANE_TOLERANCE = 20; // Maior que inimigos comuns
+export const BOSS_ATTACK_RADIUS = 60; // Distância para iniciar ataque
+export const BOSS_APPROACH_SPEED = 50; // Velocidade de aproximação (lenta, ameaçadora)
 
 // ── Ataques ────────────────────────────────────────────────
 export type BossAttackType = 'charge' | 'projectile' | 'aoe';
