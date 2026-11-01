@@ -776,18 +776,35 @@ export class GameScene extends Phaser.Scene {
   }
 
   private _onPlayerHitEnemy(playerHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
+    console.log('[DEBUG] OVERLAP DETECTADO - Player hitbox vs Enemy');
+    
     const enemy = enemyObj as Enemy;
     const attack = this._player.getCurrentAttack();
-    if (!attack) return;
+    
+    if (!attack) {
+      console.log('[DEBUG] ❌ Sem ataque ativo, retornando');
+      return;
+    }
+    
+    console.log('[DEBUG] ✅ Ataque ativo:', attack.damage, 'dano');
 
-    if (!this._player.canHitTarget(enemy)) return;
+    if (!this._player.canHitTarget(enemy)) {
+      console.log('[DEBUG] ❌ canHitTarget retornou false');
+      return;
+    }
+    
+    console.log('[DEBUG] ✅ canHitTarget retornou true');
 
     this._player.registerHit(enemy);
 
     const knockbackDir = this._player.facingRight ? 1 : -1;
     const knockbackX = knockbackDir * attack.knockback;
+    
+    console.log('[DEBUG] Aplicando dano:', attack.damage, 'knockback:', knockbackX, 'knockdown:', attack.knockdown);
 
     const died = enemy.takeEnemyDamage(attack.damage, knockbackX, attack.knockdown);
+    
+    console.log('[DEBUG] takeEnemyDamage retornou died:', died);
 
     this._hitstopFrames = attack.hitstop;
     this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
@@ -796,6 +813,8 @@ export class GameScene extends Phaser.Scene {
     this._comboCount++;
     this._comboTimer = this.time.now + 2000;
     this.game.events.emit(EVENTS.COMBO_CHANGED, this._comboCount);
+    
+    console.log('[DEBUG] ✅ Dano aplicado com sucesso!');
   }
 
   private _onEnemyHitPlayer(enemyHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, playerObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
@@ -834,9 +853,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private _onEnemyDied(_enemy: Enemy, x: number, y: number): void {
+    console.log('[DEBUG] _onEnemyDied - Evento recebido em', x, y);
+    
     if (this._deathParticles) {
       this._deathParticles.setPosition(x, y);
       this._deathParticles.explode(10);
+      console.log('[DEBUG] _onEnemyDied - Partículas de morte emitidas');
     }
 
     // Respawn infinito apenas se ENDLESS_RESPAWN estiver ativo (debug)
@@ -845,25 +867,35 @@ export class GameScene extends Phaser.Scene {
         const randomX = Phaser.Math.Between(200, WORLD_WIDTH - 200);
         const randomY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
         this._spawnEnemyAt(randomX, randomY);
+        console.log('[DEBUG] _onEnemyDied - Inimigo respawnado em', randomX, randomY);
       });
     }
 
     // Atualiza contador de onda
+    console.log('[DEBUG] _onEnemyDied - currentWaveIndex:', this._currentWaveIndex, 'waveEnemiesRemaining:', this._waveEnemiesRemaining);
+    
     if (this._currentWaveIndex >= 0 && this._waveEnemiesRemaining > 0) {
       this._waveEnemiesRemaining--;
+      console.log('[DEBUG] _onEnemyDied - waveEnemiesRemaining decrementado para:', this._waveEnemiesRemaining);
       this.game.events.emit(EVENTS.WAVE_ENEMIES_LEFT, this._waveEnemiesRemaining);
 
       if (this._waveEnemiesRemaining <= 0) {
+        console.log('[DEBUG] _onEnemyDied - Onda concluída! Chamando _onWaveCleared');
         this._onWaveCleared();
       }
     }
 
     // Reseta combo se não houver mais inimigos vivos
     const aliveEnemies = this._enemies.filter(e => e.isActive && e.fighterState !== FighterState.Dead);
+    console.log('[DEBUG] _onEnemyDied - Inimigos vivos:', aliveEnemies.length);
+    
     if (aliveEnemies.length === 0) {
       this._comboCount = 0;
       this.game.events.emit(EVENTS.COMBO_CHANGED, 0);
+      console.log('[DEBUG] _onEnemyDied - Combo resetado');
     }
+    
+    console.log('[DEBUG] ✅ _onEnemyDied - Processamento concluído!');
   }
 
   private _createDeathParticles(): void {
