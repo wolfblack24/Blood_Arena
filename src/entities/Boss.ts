@@ -314,6 +314,7 @@ export class Boss extends Fighter {
 
   private _updateAI(): void {
     const body = this.body as Phaser.Physics.Arcade.Body;
+    const player = this._player;
     
     // DEBUG: Log do estado e velocidade
     if (this._bossState === BossState.Idle || this._bossState === BossState.Recover) {
@@ -329,22 +330,23 @@ export class Boss extends Fighter {
       return;
     }
 
-    // Lógica de aproximação: se está em Idle ou Recover e o jogador está fora do attackRadius
-    if ((this._bossState === BossState.Idle || this._bossState === BossState.Recover) && this._player) {
-      const dx = this._player.x - this.x;
-      const distance = Math.abs(dx);
+    // Dentro de _updateAI, quando estiver em Idle e longe do jogador:
+    if (this._bossState === BossState.Idle && player) {
+      const distance = Phaser.Math.Distance.Between(this.x, this.y, player.x, player.y);
+      const attackRange = 60; // Ajuste conforme necessário
       
-      // Se o jogador está fora do attackRadius, aproxima-se
-      if (distance > BOSS_ATTACK_RADIUS) {
-        // Define a direção (facing)
-        this.setFacing(dx > 0);
+      if (distance > attackRange) {
+        // Boss deve se mover em direção ao jogador
+        const speed = 50; // Velocidade mais lenta que inimigos comuns (mais ameaçador)
+        const dx = player.x - this.x;
+        const moveDir = dx > 0 ? 1 : -1;
         
-        // Aplica velocidade de aproximação
-        const direction = dx > 0 ? 1 : -1;
-        body.setVelocityX(BOSS_APPROACH_SPEED * direction);
+        body.setVelocityX(speed * moveDir);
+        this.setFacing(dx > 0);
       } else {
-        // Parou de se aproximar, zera velocidade X
         body.setVelocityX(0);
+        // Agora pode decidir atacar
+        this._makeDecision();
       }
     }
 
