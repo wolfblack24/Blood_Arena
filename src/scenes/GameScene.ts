@@ -775,43 +775,47 @@ export class GameScene extends Phaser.Scene {
     );
   }
 
-  private _onPlayerHitEnemy(playerHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
-    console.log('[DEBUG GameScene] OVERLAP detectado!');
+  private _onPlayerHitEnemy(
+    playerHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, 
+    enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile
+  ): void {
+    console.log('🎯 [OVERLAP] Detectado!');
     
     const enemy = enemyObj as Enemy;
     const attack = this._player.getCurrentAttack();
     
-    console.log('[DEBUG GameScene] Attack atual:', attack ? 'EXISTS' : 'NULL');
-    console.log('[DEBUG GameScene] Enemy isActive:', enemy.isActive);
-    console.log('[DEBUG GameScene] Enemy fighterState:', enemy.fighterState);
-    
-    if(!attack){
-        console.log('[DEBUG GameScene] ❌ SEM ATAQUE ATIVO - Retornando');
+    if (!attack) {
+        console.log('❌ [OVERLAP] Sem ataque ativo');
         return;
     }
     
-    console.log('[DEBUG GameScene] Chamando canHitTarget...');
-    if(!this._player.canHitTarget(enemy)){
-        console.log('[DEBUG GameScene] ❌ canHitTarget retornou FALSE');
+    console.log('✅ [OVERLAP] Ataque ativo:', attack.damage, 'dano');
+    
+    if (!this._player.canHitTarget(enemy)) {
+        console.log('❌ [OVERLAP] canHitTarget retornou false');
         return;
     }
     
-    console.log('[DEBUG GameScene] ✅ canHitTarget passou! Registrando hit...');
+    console.log('✅ [OVERLAP] canHitTarget passou!');
+    
     this._player.registerHit(enemy);
     
     const knockbackDir = this._player.facingRight ? 1 : -1;
     const knockbackX = knockbackDir * attack.knockback;
     
-    console.log('[DEBUG GameScene] Aplicando dano:', attack.damage, 'knockback:', knockbackX);
+    console.log('💥 [OVERLAP] Aplicando', attack.damage, 'de dano no inimigo');
     const died = enemy.takeEnemyDamage(attack.damage, knockbackX, attack.knockdown);
     
-    console.log('[DEBUG GameScene] Dano aplicado! Inimigo morreu?', died);
+    console.log(died ? '☠️ Inimigo morreu!' : '🩹 Inimigo ferido');
     
+    // Efeitos visuais
     this._hitstopFrames = attack.hitstop;
-    this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY/1000);
-    this._flashImpact(enemy.x, enemy.y-16);
+    this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
+    this._flashImpact(enemy.x, enemy.y - 16);
+    
+    // Combo
     this._comboCount++;
-    this._comboTimer = this.time.now+2000;
+    this._comboTimer = this.time.now + 2000;
     this.game.events.emit(EVENTS.COMBO_CHANGED, this._comboCount);
   }
 

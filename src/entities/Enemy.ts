@@ -535,53 +535,56 @@ export class Enemy extends Fighter {
    * Aplica dano ao inimigo.
    */
   takeEnemyDamage(amount: number, knockbackX: number = 0, knockdown: boolean = false): boolean {
-    console.log('[DEBUG] takeEnemyDamage - Iniciando, amount:', amount, 'knockbackX:', knockbackX, 'knockdown:', knockdown);
+    console.log('⚔️ [ENEMY] Recebendo', amount, 'de dano. HP atual:', this._hp);
     
     if (this.isInvulnerable()) {
-      console.log('[DEBUG] ❌ takeEnemyDamage: Inimigo está invulnerável');
-      return false;
+        console.log('🛡️ [ENEMY] Invulnerável!');
+        return false;
     }
     
     if (this._fighterState === FighterState.Dead) {
-      console.log('[DEBUG] ❌ takeEnemyDamage: Inimigo já está morto');
-      return false;
+        console.log('⛔ [ENEMY] Já está morto!');
+        return false;
     }
     
     if (!this._isActive) {
-      console.log('[DEBUG] ❌ takeEnemyDamage: Inimigo não está ativo');
-      return false;
+        console.log('⛔ [ENEMY] Não está ativo (pooling)!');
+        return false;
     }
-
-    console.log('[DEBUG] ✅ takeEnemyDamage: HP antes do dano:', this._hp);
-
-    // Cancela o ataque atual antes de mudar o estado
+    
+    console.log('✅ [ENEMY] Dano válido. Aplicando...');
+    
+    // Cancela ataque atual
     this._cancelAttack();
-
+    
+    // Aplica dano na classe base
     const died = this.takeDamage(amount, knockbackX, knockdown);
     
-    console.log('[DEBUG] takeEnemyDamage - HP após takeDamage:', this._hp, 'died:', died);
-
+    console.log('💀 [ENEMY] HP após dano:', this._hp, '- Morreu?', died);
+    
     // Emite evento
     this.scene.game.events.emit(EVENTS.ENEMY_DAMAGED, this, amount);
-
+    
     if (died) {
-      console.log('[DEBUG] ✅ takeEnemyDamage: Inimigo morreu! Chamando _handleDeath');
-      this._handleDeath();
+        console.log('💀 [ENEMY] MORREU!');
+        this._handleDeath();
     } else {
-      // Timer de estado
-      if (knockdown) {
-        this._stateEndTime = this.scene.time.now + KNOCKDOWN_DURATION;
-        console.log('[DEBUG] takeEnemyDamage: Inimigo em knockdown até', this._stateEndTime);
-      } else {
-        this._stateEndTime = this.scene.time.now + HURT_STUN_DURATION;
-        console.log('[DEBUG] takeEnemyDamage: Inimigo em hurt até', this._stateEndTime);
-      }
-
-      // Muda estado da IA
-      this._aiState = EnemyAIState.HURT;
+        // Aplica estado HURT
+        if (knockdown) {
+            this._stateEndTime = this.scene.time.now + KNOCKDOWN_DURATION;
+        } else {
+            this._stateEndTime = this.scene.time.now + HURT_STUN_DURATION;
+        }
+        this._aiState = EnemyAIState.HURT;
+        
+        // Aplica knockback
+        if (knockbackX !== 0) {
+            const body = this.body as Phaser.Physics.Arcade.Body;
+            body.setVelocityX(knockbackX);
+            console.log('↩️ [ENEMY] Knockback aplicado:', knockbackX);
+        }
     }
-
-    console.log('[DEBUG] ✅ takeEnemyDamage: Dano aplicado com sucesso! HP restante:', this._hp);
+    
     return died;
   }
 
