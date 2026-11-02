@@ -447,11 +447,20 @@ export class Player extends Fighter {
     this._hitboxBody.enable = true;
     this._hitboxBody.setSize(this._currentAttack.hitboxWidth, this._currentAttack.hitboxHeight);
     
-    // DEBUG VISUAL: Cria retângulo vermelho brilhante
+    // CORREÇÃO: Posiciona a hitbox na altura do tronco (não no chão)
     const offsetX = this._facingRight ? 15 : -15;
     const hitboxX = this.groundX + offsetX;
-    const hitboxY = this.groundY - 10;
     
+    // Ajuste: groundY - 25 coloca a hitbox na altura do peito/tronco
+    // (inimigos têm ~32px de altura, origin em (0.5, 1), corpo fica em Y ~140-170)
+    const hitboxY = this.groundY - 25;
+    
+    this._hitboxZone.setPosition(hitboxX, hitboxY);
+    
+    // DEBUG VISUAL: Cria retângulo vermelho brilhante
+    if (this.debugHitboxRect) {
+        this.debugHitboxRect.destroy();
+    }
     this.debugHitboxRect = this.scene.add.rectangle(
         hitboxX,
         hitboxY,
@@ -462,10 +471,7 @@ export class Player extends Fighter {
     );
     this.debugHitboxRect.setDepth(100); // Fica acima de tudo
     
-    console.log(`📍 [DEBUG] Hitbox ativada em (${hitboxX}, ${hitboxY}) - Tamanho: ${this._currentAttack.hitboxWidth}x${this._currentAttack.hitboxHeight}`);
-    
-    // Atualiza posição da hitbox física
-    this._hitboxZone.setPosition(hitboxX, hitboxY);
+    console.log(`👊 Hitbox ativada em (${hitboxX}, ${hitboxY}) - Alinhada com tronco`);
   }
 
   private _deactivateHitbox(): void {
@@ -491,10 +497,18 @@ export class Player extends Fighter {
 
   private _updateHitboxPosition(): void {
     if (!this._hitboxBody.enable || !this._currentAttack) return;
-
-    // Posiciona a hitbox na frente do jogador, usando groundY (sem offset visual)
+    
+    // CORREÇÃO: Mesma altura do _activateHitbox
     const offsetX = this._facingRight ? 15 : -15;
-    this._hitboxZone.setPosition(this.groundX + offsetX, this.groundY - 10);
+    const hitboxX = this.groundX + offsetX;
+    const hitboxY = this.groundY - 25; // Ajustado para altura do tronco
+    
+    this._hitboxZone.setPosition(hitboxX, hitboxY);
+    
+    // Atualiza debug visual
+    if (this.debugHitboxRect) {
+        this.debugHitboxRect.setPosition(hitboxX, hitboxY);
+    }
   }
 
   /**
