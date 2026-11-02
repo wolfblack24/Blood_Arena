@@ -85,6 +85,8 @@ export class GameScene extends Phaser.Scene {
   // ── Debug ──────────────────────────────────────────────
   private _debugMode: boolean = false;
   private _debugGraphics!: Phaser.GameObjects.Graphics;
+  private debugText!: Phaser.GameObjects.Text;
+  private debugTimer: number = 0;
 
   // ── Combo ──────────────────────────────────────────────
   private _comboCount: number = 0;
@@ -149,6 +151,14 @@ export class GameScene extends Phaser.Scene {
     const startX = 100;
     const startY = (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2;
     this._player = new Player(this, startX, startY, this._playerState);
+
+    // Cria texto de debug fixo na tela (ScrollFactor 0 = não mexe com a câmera)
+    this.debugText = this.add.text(10, 10, 'DEBUG: Pronto', {
+        fontSize: '14px',
+        color: '#00ff00',
+        backgroundColor: '#000000',
+        padding: { x: 4, y: 4 }
+    }).setScrollFactor(0).setDepth(9999);
 
     // ── Cria inimigos (Object Pool) ──────────────────────
     this._enemyGroup = this.physics.add.group({
@@ -779,34 +789,26 @@ export class GameScene extends Phaser.Scene {
     playerHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, 
     enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile
   ): void {
-    console.log('🎯 [OVERLAP] Detectado!');
-    
     const enemy = enemyObj as Enemy;
     const attack = this._player.getCurrentAttack();
     
     if (!attack) {
-        console.log('❌ [OVERLAP] Sem ataque ativo');
+        this.showDebug('❌ OVERLAP: Sem ataque ativo');
         return;
     }
-    
-    console.log('✅ [OVERLAP] Ataque ativo:', attack.damage, 'dano');
     
     if (!this._player.canHitTarget(enemy)) {
-        console.log('❌ [OVERLAP] canHitTarget retornou false');
+        this.showDebug('❌ OVERLAP: canHitTarget falhou (distância/invulnerabilidade)');
         return;
     }
     
-    console.log('✅ [OVERLAP] canHitTarget passou!');
-    
     this._player.registerHit(enemy);
-    
     const knockbackDir = this._player.facingRight ? 1 : -1;
     const knockbackX = knockbackDir * attack.knockback;
     
-    console.log('💥 [OVERLAP] Aplicando', attack.damage, 'de dano no inimigo');
     const died = enemy.takeEnemyDamage(attack.damage, knockbackX, attack.knockdown);
     
-    console.log(died ? '☠️ Inimigo morreu!' : '🩹 Inimigo ferido');
+    this.showDebug(`✅ DANO APLICADO! Dano: ${attack.damage} | HP Restante: ${enemy.hp} | Morto: ${died}`);
     
     // Efeitos visuais
     this._hitstopFrames = attack.hitstop;
@@ -817,6 +819,11 @@ export class GameScene extends Phaser.Scene {
     this._comboCount++;
     this._comboTimer = this.time.now + 2000;
     this.game.events.emit(EVENTS.COMBO_CHANGED, this._comboCount);
+  }
+
+  private showDebug(message: string): void {
+    this.debugText.setText(message);
+    this.debugTimer = this.time.now + 2000; // Mostra por 2 segundos
   }
 
   private _onEnemyHitPlayer(enemyHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, playerObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
@@ -1040,6 +1047,18 @@ export class GameScene extends Phaser.Scene {
       this._drawDebug();
     } else {
       this._debugGraphics.clear();
+    }
+
+    // Debug de estado do ataque
+    const attack = this._player.getCurrentAttack();
+    const isAttacking = this._player.fighterState === FighterState.Attack;
+    
+    if (this.time.now > this.debugTimer) {
+        if (isAttacking && attack) {
+            this.debugText.setText(`👊 ATACANDO... Hitbox ativa?`);
+        } else {
+            this.debugText.setText('DEBUG: Pronto (Aperte J para testar)');
+        }
     }
   }
 
