@@ -129,6 +129,7 @@ export class Player extends Fighter {
     this._jumpKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this._attackKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.J);
     this._dashKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.K);
+    this._specialKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.K); // Rising Tackle usa a mesma tecla do dash
     this._debugKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.H);
   }
 
@@ -347,6 +348,9 @@ export class Player extends Fighter {
   // ═══════════════════════════════════════════════════════
 
   private _handleRisingTackle(): void {
+    // Verificação de segurança: _specialKey deve estar inicializado
+    if (!this._specialKey) return;
+
     // Não pode carregar em estados restritivos
     if (this._fighterState === FighterState.Hurt ||
         this._fighterState === FighterState.Knockdown ||
@@ -383,6 +387,12 @@ export class Player extends Fighter {
   }
 
   private _startRisingTackle(): void {
+    // Verificação de segurança: RISING_TACKLE deve estar definido
+    if (!RISING_TACKLE) {
+      console.error('[CRITICAL ERROR] RISING_TACKLE is undefined!');
+      return;
+    }
+
     this._isRisingTackleActive = true;
     this._currentAttack = RISING_TACKLE;
     this._attackStartTime = this.scene.time.now;
@@ -403,7 +413,9 @@ export class Player extends Fighter {
 
     // Agenda ativação da hitbox (após startup)
     const activateTimer = this.scene.time.delayedCall(RISING_TACKLE.startup, () => {
-      this._activateHitbox();
+      if (this._isRisingTackleActive) {
+        this._activateHitbox();
+      }
     });
 
     // Agenda desativação da hitbox (após active)
@@ -418,7 +430,9 @@ export class Player extends Fighter {
     const endTimer = this.scene.time.delayedCall(
       RISING_TACKLE.startup + RISING_TACKLE.active + RISING_TACKLE.recovery,
       () => {
-        this._endRisingTackle();
+        if (this._isRisingTackleActive) {
+          this._endRisingTackle();
+        }
       }
     );
 
@@ -592,6 +606,12 @@ export class Player extends Fighter {
     this._currentAttack = undefined;
     this._deactivateHitbox();
     this._hitTargets.clear();
+    
+    // Cancela Rising Tackle se estiver ativo
+    if (this._isRisingTackleActive) {
+      this._isRisingTackleActive = false;
+      this._isChargingRisingTackle = false;
+    }
   }
 
   private _updateHitboxPosition(): void {

@@ -172,8 +172,14 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
     };
 
     const animKey = animMap[this._fighterState];
+    
+    // Verificação de segurança: verifica se a animação existe antes de tocar
     if (this.anims.currentAnim?.key !== animKey) {
-      this.play(animKey, true);
+      if (this.anims.exists(animKey)) {
+        this.play(animKey, true);
+      } else {
+        console.warn(`[Animation Warning] Animation '${animKey}' does not exist!`);
+      }
     }
   }
 

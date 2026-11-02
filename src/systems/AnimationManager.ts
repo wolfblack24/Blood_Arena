@@ -19,7 +19,7 @@
 import Phaser from 'phaser';
 
 /** Nomes das animações (tipados para segurança) */
-export type AnimationName = 'idle' | 'run' | 'jump' | 'attack' | 'dash' | 'hurt' | 'fall' | 'knockdown';
+export type AnimationName = 'idle' | 'run' | 'jump' | 'attack' | 'dash' | 'hurt' | 'fall' | 'knockdown' | 'rising_tackle';
 
 /**
  * Gera todas as texturas placeholder no cache do Phaser.
@@ -102,6 +102,23 @@ export function generatePlaceholderTextures(scene: Phaser.Scene): void {
   hurtGfx.fillRect(11, -4, 4, 4);
   hurtGfx.generateTexture('player_hurt', w, h);
   hurtGfx.destroy();
+
+  // ── Rising Tackle (1 frame - pose especial) ────────────
+  if (!scene.textures.exists('player_rising_tackle')) {
+    const rtGfx = scene.add.graphics();
+    rtGfx.fillStyle(0x4488ff, 1);     // azul brilhante
+    rtGfx.fillRect(4, 0, 12, 18);
+    rtGfx.fillStyle(0xf5deb3, 1);
+    rtGfx.fillRect(6, -22, 8, 8);
+    // Braço estendido para cima
+    rtGfx.fillStyle(0xf5deb3, 1);
+    rtGfx.fillRect(14, -28, 4, 16);
+    rtGfx.fillStyle(0x1a1a1a, 1);
+    rtGfx.fillRect(5, -4, 4, 4);
+    rtGfx.fillRect(11, -4, 4, 4);
+    rtGfx.generateTexture('player_rising_tackle', w, h + 10);
+    rtGfx.destroy();
+  }
 
   // ── Knockdown (deitado) ────────────────────────────────
   const kdGfx = scene.add.graphics();
@@ -557,6 +574,14 @@ export function createAnimations(anims: Phaser.Animations.AnimationManager): voi
   anims.create({
     key: 'fall',
     frames: [{ key: 'player_jump', frame: 0 }],
+    frameRate: 1,
+    repeat: 0,
+  });
+
+  // Rising Tackle (pose especial)
+  anims.create({
+    key: 'rising_tackle',
+    frames: [{ key: 'player_rising_tackle', frame: 0 }],
     frameRate: 1,
     repeat: 0,
   });
