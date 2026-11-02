@@ -48,6 +48,13 @@ export const SPECIAL_STAMINA_COST = 30;        // custo de stamina
 export const SPECIAL_COOLDOWN = 800;           // ms de cooldown pós-ataque
 export const RISING_TACKLE_JUMP_FORCE = 280;   // força do pulo vertical
 
+// ── Agarrão (Grab & Throw) ─────────────────────────────────
+export const GRAB_RANGE = 45;                  // Largura da zona de grab
+export const GRAB_HOLD_TIME = 600;             // ms segurando antes do arremesso
+export const GRAB_THROW_DAMAGE = 15;           // Dano do arremesso
+export const GRAB_THROW_FORCE_X = 250;         // Força horizontal do arremesso
+export const GRAB_THROW_FORCE_Y = -150;        // Força vertical (pequeno pulo)
+
 // ── Inimigo ────────────────────────────────────────────────
 export const ENEMY_HP_MAX = 40;
 export const ENEMY_SCORE_VALUE = 100;  // pontos ao derrotar

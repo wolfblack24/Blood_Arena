@@ -31,6 +31,11 @@ import {
   SPECIAL_STAMINA_COST,
   SPECIAL_COOLDOWN,
   RISING_TACKLE_JUMP_FORCE,
+  GRAB_RANGE,
+  GRAB_HOLD_TIME,
+  GRAB_THROW_DAMAGE,
+  GRAB_THROW_FORCE_X,
+  GRAB_THROW_FORCE_Y,
 } from '../config/constants';
 import {
   DASH_DURATION,
@@ -83,6 +88,14 @@ export class Player extends Fighter {
   private _risingTackleCooldownEnd: number = 0;
   private _isRisingTackleActive: boolean = false;
 
+  // ── Agarrão (Grab & Throw) ─────────────────────────────
+  private _isGrabbing: boolean = false;
+  private _grabbedEnemy?: Fighter;
+  private _grabEndTime: number = 0;
+  private _nearestGrabTarget?: Fighter; // Injetado via GameScene
+  private _grabZone!: Phaser.GameObjects.Zone;
+  private _grabZoneBody!: Phaser.Physics.Arcade.Body;
+
   // ── Timers de estado ───────────────────────────────────
   private _stateEndTime: number = 0;
 
@@ -108,6 +121,14 @@ export class Player extends Fighter {
     this._hitboxBody.enable = false; // desabilitada por padrão
     this._hitboxBody.setAllowGravity(false);
 
+    // ── Cria a zona de grab (invisível) ──────────────────
+    this._grabZone = scene.add.zone(0, 0, GRAB_RANGE, 32);
+    scene.physics.add.existing(this._grabZone);
+    this._grabZoneBody = this._grabZone.body as Phaser.Physics.Arcade.Body;
+    this._grabZoneBody.enable = true;
+    this._grabZoneBody.setAllowGravity(false);
+    this._grabZoneBody.setImmovable(true);
+
     // ── Controles ────────────────────────────────────────
     this._setupControls();
   }
@@ -129,8 +150,9 @@ export class Player extends Fighter {
     this._jumpKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this._attackKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.J);
     this._dashKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.K);
-    this._specialKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.K); // Rising Tackle usa a mesma tecla do dash
-    this._debugKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.H);
+    this._grabKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.H);
+    this._specialKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.L); // Rising Tackle agora usa L
+    this._debugKey = this.scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F1);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -180,6 +202,7 @@ export class Player extends Fighter {
     this.clampToWalkZone();
     this.applyJumpVisualOffset();
     this._updateHitboxPosition();
+    this.updateGrabZone();
   }
 
   // ═══════════════════════════════════════════════════════
@@ -208,6 +231,7 @@ export class Player extends Fighter {
     this._handleJump();
     this._handleDash();
     this._handleRisingTackle();
+    this._handleGrab();
   }
 
   private _handleMovement(): void {
@@ -465,6 +489,110 @@ export class Player extends Fighter {
   }
 
   // ═══════════════════════════════════════════════════════
+  // AGARRÃO (GRAB & THROW)
+  // ═══════════════════════════════════════════════════════
+
+  /**
+   * Define o inimigo mais próximo para grab (injetado pelo GameScene).
+   */
+  setNearestGrabTarget(enemy: Fighter | undefined): void {
+    this._nearestGrabTarget = enemy;
+  }
+
+  /**
+   * Retorna o inimigo mais próximo para grab.
+   */
+  getNearestGrabTarget(): Fighter | undefined {
+    return this._nearestGrabTarget;
+  }
+
+  /**
+   * Retorna a zona de grab para overlap no GameScene.
+   */
+  getGrabZone(): Phaser.GameObjects.Zone {
+    return this._grabZone;
+  }
+
+  /**
+   * Atualiza a posição da zona de grab.
+   */
+  updateGrabZone(): void {
+    const offsetX = this._facingRight ? 20 : -20;
+    this._grabZone.setPosition(this.x + offsetX, this.y - 16);
+  }
+
+  /**
+   * Lógica do agarrão.
+   */
+  private _handleGrab(): void {
+    // Não pode agarrar em estados restritivos
+    if (this._fighterState === FighterState.Dead || 
+        this._fighterState === FighterState.Hurt || 
+        this._fighterState === FighterState.Knockdown ||
+        this._isGrabbing ||
+        this._fighterState === FighterState.Attack) {
+      return;
+    }
+
+    // Verifica se a tecla foi pressionada
+    if (!Phaser.Input.Keyboard.JustDown(this._grabKey)) return;
+    
+    // Verifica se há um alvo válido
+    const target = this._nearestGrabTarget;
+    if (target && target.fighterState !== FighterState.Dead && !target.isInvulnerable()) {
+      this._startGrab(target);
+    }
+  }
+
+  /**
+   * Inicia o agarrão.
+   */
+  private _startGrab(target: Fighter): void {
+    this._isGrabbing = true;
+    this._grabbedEnemy = target;
+    this._grabEndTime = this.scene.time.now + GRAB_HOLD_TIME;
+    
+    // Trava física de ambos
+    const myBody = this.body as Phaser.Physics.Arcade.Body;
+    const enemyBody = target.body as Phaser.Physics.Arcade.Body;
+    myBody.setVelocity(0, 0);
+    enemyBody.setVelocity(0, 0);
+    
+    // Muda estado para Attack (reutiliza para animação)
+    this.changeState(FighterState.Attack);
+    
+    // Agenda o arremesso
+    this.scene.time.delayedCall(GRAB_HOLD_TIME, () => {
+      if (this._isGrabbing && this._grabbedEnemy === target) {
+        this._throwEnemy();
+      }
+    });
+  }
+
+  /**
+   * Arremessa o inimigo agarrado.
+   */
+  private _throwEnemy(): void {
+    if (!this._grabbedEnemy) return;
+    
+    const throwDir = this._facingRight ? 1 : -1;
+    const enemyBody = this._grabbedEnemy.body as Phaser.Physics.Arcade.Body;
+    
+    // Aplica velocidade de arremesso
+    enemyBody.setVelocity(throwDir * GRAB_THROW_FORCE_X, GRAB_THROW_FORCE_Y);
+    
+    // Aplica dano e knockdown (usando type assertion pois Enemy herda de Fighter)
+    if ((this._grabbedEnemy as any).takeEnemyDamage) {
+      (this._grabbedEnemy as any).takeEnemyDamage(GRAB_THROW_DAMAGE, throwDir * GRAB_THROW_FORCE_X, true);
+    }
+    
+    // Reseta estado
+    this._isGrabbing = false;
+    this._grabbedEnemy = undefined;
+    this.changeState(FighterState.Idle);
+  }
+
+  // ═══════════════════════════════════════════════════════
   // COMBATE
   // ═══════════════════════════════════════════════════════
 
@@ -611,6 +739,12 @@ export class Player extends Fighter {
     if (this._isRisingTackleActive) {
       this._isRisingTackleActive = false;
       this._isChargingRisingTackle = false;
+    }
+
+    // Cancela Grab se estiver ativo
+    if (this._isGrabbing) {
+      this._isGrabbing = false;
+      this._grabbedEnemy = undefined;
     }
   }
 

@@ -766,10 +766,20 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _setupCombatOverlaps(): void {
+    // Overlap para ataque normal
     this.physics.add.overlap(
       this._player.getHitboxZone(),
       this._enemyGroup,
       this._onPlayerHitEnemy as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
+      undefined,
+      this
+    );
+
+    // Overlap para zona de grab
+    this.physics.add.overlap(
+      this._player.getGrabZone(),
+      this._enemyGroup,
+      this._onGrabZoneOverlap as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
       undefined,
       this
     );
@@ -801,6 +811,26 @@ export class GameScene extends Phaser.Scene {
     this._comboCount++;
     this._comboTimer = this.time.now + 2000;
     this.game.events.emit(EVENTS.COMBO_CHANGED, this._comboCount);
+  }
+
+  /**
+   * Callback para overlap da zona de grab com inimigos.
+   * Atualiza o inimigo mais próximo para o grab.
+   */
+  private _onGrabZoneOverlap(
+    grabZone: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile,
+    enemyObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile
+  ): void {
+    const enemy = enemyObj as Enemy;
+    
+    // Verifica se o inimigo está vivo e não está invulnerável
+    if (enemy.fighterState === FighterState.Dead || enemy.isInvulnerable()) {
+      return;
+    }
+
+    // Define como alvo mais próximo (simplesmente o primeiro que encontrar)
+    // Em uma implementação mais sofisticada, poderíamos calcular a distância
+    this._player.setNearestGrabTarget(enemy);
   }
 
   private _onEnemyHitPlayer(enemyHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, playerObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
@@ -978,6 +1008,9 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
+
+    // Reset do grab target (será atualizado pelo overlap se houver inimigo próximo)
+    this._player.setNearestGrabTarget(undefined);
 
     // Dano manual do jogador no boss (resolução manual, sem overlap)
     if (this._boss && this._player.getCurrentAttack()) {
