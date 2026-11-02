@@ -39,41 +39,41 @@ export const PLAYER_ATTACKS: AttackData[] = [
   // Golpe 1: jab rápido
   {
     startup: 80,
-    active: 100,
+    active: 200,      // Aumentado de 100 para 200 (mais tempo de hitbox ativa)
     recovery: 150,
     damage: 8,
     hitstop: 2,
     knockback: 80,
     knockdown: false,
-    hitboxWidth: 20,
-    hitboxHeight: 12,
-    zTolerance: 15,
+    hitboxWidth: 30,  // Aumentado de 20 para 30 (hitbox maior)
+    hitboxHeight: 20, // Aumentado de 12 para 20
+    zTolerance: 25,   // Aumentado de 15 para 25
   },
   // Golpe 2: cruzado
   {
     startup: 100,
-    active: 120,
+    active: 250,      // Aumentado de 120 para 250
     recovery: 180,
     damage: 8,
     hitstop: 3,
     knockback: 100,
     knockdown: false,
-    hitboxWidth: 24,
-    hitboxHeight: 14,
-    zTolerance: 15,
+    hitboxWidth: 35,  // Aumentado
+    hitboxHeight: 22,
+    zTolerance: 25,
   },
   // Golpe 3: uppercut (causa knockdown)
   {
     startup: 120,
-    active: 140,
+    active: 300,      // Aumentado de 140 para 300
     recovery: 250,
     damage: 14,
     hitstop: 4,
     knockback: 150,
     knockdown: true,
-    hitboxWidth: 22,
-    hitboxHeight: 18,
-    zTolerance: 20,
+    hitboxWidth: 32,
+    hitboxHeight: 25,
+    zTolerance: 30,
   },
 ];
 

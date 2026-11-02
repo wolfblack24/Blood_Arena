@@ -471,7 +471,7 @@ export class Player extends Fighter {
     );
     this.debugHitboxRect.setDepth(100); // Fica acima de tudo
     
-    console.log(`👊 Hitbox ativada em (${hitboxX}, ${hitboxY}) - Alinhada com tronco`);
+    console.log(`👊 Hitbox ATIVA por ${this._currentAttack.active}ms em (${hitboxX}, ${hitboxY})`);
   }
 
   private _deactivateHitbox(): void {
@@ -516,51 +516,35 @@ export class Player extends Fighter {
    * Usa groundY para validação de faixa (posição real do chão).
    */
   canHitTarget(target: Fighter): boolean {
-    console.log('[DEBUG] canHitTarget - Iniciando verificação');
+    if (!this._currentAttack) return false;
+    if (this._hitTargets.has(target)) return false;
+    if (target.fighterState === FighterState.Dead) return false;
+    if (target.fighterState === FighterState.Knockdown) return false;
+    if (target.isInvulnerable()) return false;
     
-    if (!this._currentAttack) {
-      console.log('[DEBUG] ❌ canHitTarget: Sem ataque ativo');
-      return false;
-    }
-    
-    if (this._hitTargets.has(target)) {
-      console.log('[DEBUG] ❌ canHitTarget: Alvo já foi atingido neste swing');
-      return false;
-    }
-    
-    if (target.fighterState === FighterState.Dead) {
-      console.log('[DEBUG] ❌ canHitTarget: Alvo está morto');
-      return false;
-    }
-    
-    if (target.fighterState === FighterState.Knockdown) {
-      console.log('[DEBUG] ❌ canHitTarget: Alvo está em knockdown');
-      return false;
-    }
-    
-    if (target.isInvulnerable()) {
-      console.log('[DEBUG] ❌ canHitTarget: Alvo está invulnerável');
-      return false;
-    }
-
-    // Valida profundidade usando groundY (posição real do chão)
+    // Valida profundidade usando groundY
     const laneDiff = Math.abs(this.groundY - target.groundY);
     const zDiff = Math.abs(this._jumpHeight - target.jumpHeight);
     
-    console.log('[DEBUG] canHitTarget - laneDiff:', laneDiff.toFixed(2), 'zDiff:', zDiff.toFixed(2));
-    console.log('[DEBUG] canHitTarget - LANE_TOLERANCE:', LANE_TOLERANCE, 'zTolerance:', this._currentAttack.zTolerance);
+    // DEBUG: Mostra os valores no console
+    console.log(`[canHitTarget] laneDiff: ${laneDiff.toFixed(1)}, zDiff: ${zDiff.toFixed(1)}`);
+    console.log(`[canHitTarget] LANE_TOLERANCE: ${LANE_TOLERANCE}, zTolerance: ${this._currentAttack.zTolerance}`);
     
-    if (laneDiff > LANE_TOLERANCE) {
-      console.log('[DEBUG] ❌ canHitTarget: laneDiff > LANE_TOLERANCE');
-      return false;
+    // CORREÇÃO: Aumenta temporariamente a tolerância para debug
+    const debugLaneTolerance = 30; // Aumentado de 15 para 30
+    const debugZTolerance = 30;    // Aumentado para aceitar mais variação
+    
+    if (laneDiff > debugLaneTolerance) {
+        console.log(`❌ Lane diff muito grande: ${laneDiff} > ${debugLaneTolerance}`);
+        return false;
     }
     
-    if (zDiff > this._currentAttack.zTolerance) {
-      console.log('[DEBUG] ❌ canHitTarget: zDiff > zTolerance');
-      return false;
+    if (zDiff > debugZTolerance) {
+        console.log(`❌ Z diff muito grande: ${zDiff} > ${debugZTolerance}`);
+        return false;
     }
-
-    console.log('[DEBUG] ✅ canHitTarget: Todas as verificações passaram!');
+    
+    console.log('✅ canHitTarget passou!');
     return true;
   }
 
