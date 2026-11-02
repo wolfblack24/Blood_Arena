@@ -395,52 +395,32 @@ export abstract class Fighter extends Phaser.Physics.Arcade.Sprite {
    * Retorna true se morreu.
    */
   takeDamage(amount: number, knockbackX: number = 0, knockdown: boolean = false): boolean {
-    console.log('[DEBUG] Fighter.takeDamage - Iniciando, amount:', amount, 'HP atual:', this._hp);
-    
-    if (this.isInvulnerable()) {
-      console.log('[DEBUG] ❌ Fighter.takeDamage: Está invulnerável');
-      return false;
-    }
-    
-    if (this._fighterState === FighterState.Dead) {
-      console.log('[DEBUG] ❌ Fighter.takeDamage: Já está morto');
-      return false;
-    }
-    
-    if (this._fighterState === FighterState.Knockdown) {
-      console.log('[DEBUG] ❌ Fighter.takeDamage: Está em knockdown');
-      return false;
-    }
+    if (this.isInvulnerable()) return false;
+    if (this._fighterState === FighterState.Dead) return false;
+    if (this._fighterState === FighterState.Knockdown) return false;
 
-    console.log('[DEBUG] Fighter.takeDamage - Aplicando dano:', amount);
     this._hp = Math.max(0, this._hp - amount);
-    console.log('[DEBUG] Fighter.takeDamage - HP após dano:', this._hp);
 
     // Knockback
     if (knockbackX !== 0) {
       const body = this.body as Phaser.Physics.Arcade.Body;
       body.setVelocityX(knockbackX);
-      console.log('[DEBUG] Fighter.takeDamage - Knockback aplicado:', knockbackX);
     }
 
     // Estado
     if (knockdown) {
       this.changeState(FighterState.Knockdown);
-      console.log('[DEBUG] Fighter.takeDamage - Estado mudado para Knockdown');
     } else {
       this.changeState(FighterState.Hurt);
-      console.log('[DEBUG] Fighter.takeDamage - Estado mudado para Hurt');
     }
 
     // Morte
     if (this._hp <= 0) {
-      console.log('[DEBUG] Fighter.takeDamage - HP <= 0, mudando para Dead');
       this.changeState(FighterState.Dead);
       this._stopBlink();
       return true;
     }
 
-    console.log('[DEBUG] ✅ Fighter.takeDamage - Dano aplicado com sucesso!');
     return false;
   }
 

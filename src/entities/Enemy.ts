@@ -542,24 +542,9 @@ export class Enemy extends Fighter {
    * Aplica dano ao inimigo.
    */
   takeEnemyDamage(amount: number, knockbackX: number = 0, knockdown: boolean = false): boolean {
-    console.log('⚔️ [ENEMY] Recebendo', amount, 'de dano. HP atual:', this._hp);
-    
-    if (this.isInvulnerable()) {
-        console.log('🛡️ [ENEMY] Invulnerável!');
-        return false;
-    }
-    
-    if (this._fighterState === FighterState.Dead) {
-        console.log('⛔ [ENEMY] Já está morto!');
-        return false;
-    }
-    
-    if (!this._isActive) {
-        console.log('⛔ [ENEMY] Não está ativo (pooling)!');
-        return false;
-    }
-    
-    console.log('✅ [ENEMY] Dano válido. Aplicando...');
+    if (this.isInvulnerable()) return false;
+    if (this._fighterState === FighterState.Dead) return false;
+    if (!this._isActive) return false;
     
     // Cancela ataque atual
     this._cancelAttack();
@@ -567,13 +552,10 @@ export class Enemy extends Fighter {
     // Aplica dano na classe base
     const died = this.takeDamage(amount, knockbackX, knockdown);
     
-    console.log('💀 [ENEMY] HP após dano:', this._hp, '- Morreu?', died);
-    
     // Emite evento
     this.scene.game.events.emit(EVENTS.ENEMY_DAMAGED, this, amount);
     
     if (died) {
-        console.log('💀 [ENEMY] MORREU!');
         this._handleDeath();
     } else {
         // Aplica estado HURT
@@ -588,7 +570,6 @@ export class Enemy extends Fighter {
         if (knockbackX !== 0) {
             const body = this.body as Phaser.Physics.Arcade.Body;
             body.setVelocityX(knockbackX);
-            console.log('↩️ [ENEMY] Knockback aplicado:', knockbackX);
         }
     }
     
@@ -596,8 +577,6 @@ export class Enemy extends Fighter {
   }
 
   private _handleDeath(): void {
-    console.log('[DEBUG] _handleDeath - Iniciando morte do inimigo');
-    
     // Cancela qualquer ataque em andamento
     this._cancelAttack();
 
@@ -612,11 +591,9 @@ export class Enemy extends Fighter {
     // Soma pontos
     if (this._playerState) {
       this._playerState.addScore(ENEMY_SCORE_VALUE);
-      console.log('[DEBUG] _handleDeath - Pontos adicionados:', ENEMY_SCORE_VALUE);
     }
 
     // Emite evento com posição para partículas
-    console.log('[DEBUG] _handleDeath - Emitindo evento ENEMY_DIED em', this.x, this.groundY);
     this.scene.game.events.emit(EVENTS.ENEMY_DIED, this, this.x, this.groundY);
 
     // Marca como inativo para pooling
@@ -631,10 +608,7 @@ export class Enemy extends Fighter {
     // Torna invisível após animação
     this.scene.time.delayedCall(500, () => {
       this.setVisible(false);
-      console.log('[DEBUG] _handleDeath - Inimigo agora está invisível');
     });
-    
-    console.log('[DEBUG] ✅ _handleDeath - Morte concluída!');
   }
 
   // ═══════════════════════════════════════════════════════

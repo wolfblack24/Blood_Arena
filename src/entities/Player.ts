@@ -64,9 +64,6 @@ export class Player extends Fighter {
   private _lastAttackEndTime: number = 0;
   private _hitTargets: Set<Fighter> = new Set();
   private _attackTimers?: Phaser.Time.TimerEvent[];
-  
-  // ── Debug Visual ───────────────────────────────────────
-  private debugHitboxRect?: Phaser.GameObjects.Rectangle;
 
   // ── Buffer de input ────────────────────────────────────
   private _attackBufferTime: number = 0;
@@ -447,47 +444,19 @@ export class Player extends Fighter {
   private _activateHitbox(): void {
     if (!this._currentAttack) return;
     
-    console.log('👊 [PLAYER] ATIVANDO HITBOX!');
-    
     this._hitboxBody.enable = true;
     this._hitboxBody.setSize(this._currentAttack.hitboxWidth, this._currentAttack.hitboxHeight);
     
-    // CORREÇÃO: Posiciona a hitbox na altura do tronco (não no chão)
+    // Posiciona a hitbox na altura do tronco
     const offsetX = this._facingRight ? 15 : -15;
     const hitboxX = this.groundX + offsetX;
-    
-    // Ajuste: groundY - 25 coloca a hitbox na altura do peito/tronco
-    // (inimigos têm ~32px de altura, origin em (0.5, 1), corpo fica em Y ~140-170)
     const hitboxY = this.groundY - 25;
     
     this._hitboxZone.setPosition(hitboxX, hitboxY);
-    
-    // DEBUG VISUAL: Cria retângulo vermelho brilhante
-    if (this.debugHitboxRect) {
-        this.debugHitboxRect.destroy();
-    }
-    this.debugHitboxRect = this.scene.add.rectangle(
-        hitboxX,
-        hitboxY,
-        this._currentAttack.hitboxWidth,
-        this._currentAttack.hitboxHeight,
-        0xff0000,  // Vermelho brilhante
-        0.8        // Alpha (quase opaco)
-    );
-    this.debugHitboxRect.setDepth(100); // Fica acima de tudo
-    
-    console.log(`👊 Hitbox ATIVA por ${this._currentAttack.active}ms em (${hitboxX}, ${hitboxY})`);
   }
 
   private _deactivateHitbox(): void {
     this._hitboxBody.enable = false;
-    
-    // Remove o debug visual
-    if (this.debugHitboxRect) {
-        this.debugHitboxRect.destroy();
-        this.debugHitboxRect = undefined;
-        console.log('❌ [DEBUG] Hitbox desativada');
-    }
   }
 
   /**
@@ -503,17 +472,12 @@ export class Player extends Fighter {
   private _updateHitboxPosition(): void {
     if (!this._hitboxBody.enable || !this._currentAttack) return;
     
-    // CORREÇÃO: Mesma altura do _activateHitbox
+    // Mesma altura do _activateHitbox
     const offsetX = this._facingRight ? 15 : -15;
     const hitboxX = this.groundX + offsetX;
-    const hitboxY = this.groundY - 25; // Ajustado para altura do tronco
+    const hitboxY = this.groundY - 25;
     
     this._hitboxZone.setPosition(hitboxX, hitboxY);
-    
-    // Atualiza debug visual
-    if (this.debugHitboxRect) {
-        this.debugHitboxRect.setPosition(hitboxX, hitboxY);
-    }
   }
 
   /**
@@ -531,23 +495,9 @@ export class Player extends Fighter {
     const laneDiff = Math.abs(this.groundY - target.groundY);
     const zDiff = Math.abs(this._jumpHeight - target.jumpHeight);
     
-    // Tolerância dinâmica: ataques mais fortes têm maior alcance vertical
-    const dynamicLaneTolerance = LANE_TOLERANCE + (this._currentAttack.damage * 0.5);
-    // Ex: ataque de 8 dano = 29px, ataque de 14 dano = 32px
+    if (laneDiff > LANE_TOLERANCE) return false;
+    if (zDiff > this._currentAttack.zTolerance) return false;
     
-    console.log(`[canHitTarget] laneDiff: ${laneDiff.toFixed(1)} | tolerance: ${dynamicLaneTolerance.toFixed(1)}`);
-    
-    if (laneDiff > dynamicLaneTolerance) {
-        console.log(`❌ Fora da lane: ${laneDiff} > ${dynamicLaneTolerance}`);
-        return false;
-    }
-    
-    if (zDiff > this._currentAttack.zTolerance) {
-        console.log(`❌ Fora do eixo Z: ${zDiff} > ${this._currentAttack.zTolerance}`);
-        return false;
-    }
-    
-    console.log('✅ canHitTarget passou!');
     return true;
   }
 

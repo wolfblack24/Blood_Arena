@@ -85,8 +85,6 @@ export class GameScene extends Phaser.Scene {
   // ── Debug ──────────────────────────────────────────────
   private _debugMode: boolean = false;
   private _debugGraphics!: Phaser.GameObjects.Graphics;
-  private debugText!: Phaser.GameObjects.Text;
-  private debugTimer: number = 0;
 
   // ── Combo ──────────────────────────────────────────────
   private _comboCount: number = 0;
@@ -151,14 +149,6 @@ export class GameScene extends Phaser.Scene {
     const startX = 100;
     const startY = (WALK_ZONE_TOP + WALK_ZONE_BOTTOM) / 2;
     this._player = new Player(this, startX, startY, this._playerState);
-
-    // Cria texto de debug fixo na tela (ScrollFactor 0 = não mexe com a câmera)
-    this.debugText = this.add.text(10, 10, 'DEBUG: Pronto', {
-        fontSize: '14px',
-        color: '#00ff00',
-        backgroundColor: '#000000',
-        padding: { x: 4, y: 4 }
-    }).setScrollFactor(0).setDepth(9999);
 
     // ── Cria inimigos (Object Pool) ──────────────────────
     this._enemyGroup = this.physics.add.group({
@@ -776,8 +766,6 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _setupCombatOverlaps(): void {
-    console.log('🔧 [SETUP] Configurando overlaps...');
-    
     this.physics.add.overlap(
       this._player.getHitboxZone(),
       this._enemyGroup,
@@ -785,11 +773,6 @@ export class GameScene extends Phaser.Scene {
       undefined,
       this
     );
-    
-    console.log('✅ [SETUP] Overlap configurado!');
-    
-    // Verifica se o grupo de inimigos tem membros
-    console.log(`👥 [SETUP] Inimigos no grupo: ${this._enemyGroup.getLength()}`);
   }
 
   private _onPlayerHitEnemy(
@@ -799,32 +782,17 @@ export class GameScene extends Phaser.Scene {
     const enemy = enemyObj as Enemy;
     const attack = this._player.getCurrentAttack();
     
-    if (!attack) {
-        this.showDebug('❌ OVERLAP: Sem ataque ativo');
-        return;
-    }
-    
-    if (!this._player.canHitTarget(enemy)) {
-        // Feedback visual: mostra que está fora da lane
-        const laneDiff = Math.abs(this._player.groundY - enemy.groundY);
-        const dynamicTolerance = LANE_TOLERANCE + (attack.damage * 0.5);
-        if (laneDiff > dynamicTolerance) {
-            this.showDebug(`⚠️ Fora da lane! Diff: ${laneDiff.toFixed(0)}px (max: ${dynamicTolerance.toFixed(0)}px)`);
-        } else {
-            this.showDebug('❌ OVERLAP: canHitTarget falhou (invulnerabilidade/knockdown)');
-        }
-        return;
-    }
+    if (!attack) return;
+    if (!this._player.canHitTarget(enemy)) return;
     
     this._player.registerHit(enemy);
+    
     const knockbackDir = this._player.facingRight ? 1 : -1;
     const knockbackX = knockbackDir * attack.knockback;
     
     const died = enemy.takeEnemyDamage(attack.damage, knockbackX, attack.knockdown);
     
-    this.showDebug(`✅ DANO APLICADO! Dano: ${attack.damage} | HP Restante: ${enemy.hp} | Morto: ${died}`);
-    
-    // Efeitos visuais
+    // Efeitos visuais de impacto
     this._hitstopFrames = attack.hitstop;
     this.cameras.main.shake(SCREEN_SHAKE_DURATION, SCREEN_SHAKE_INTENSITY / 1000);
     this._flashImpact(enemy.x, enemy.y - 16);
@@ -833,11 +801,6 @@ export class GameScene extends Phaser.Scene {
     this._comboCount++;
     this._comboTimer = this.time.now + 2000;
     this.game.events.emit(EVENTS.COMBO_CHANGED, this._comboCount);
-  }
-
-  private showDebug(message: string): void {
-    this.debugText.setText(message);
-    this.debugTimer = this.time.now + 2000; // Mostra por 2 segundos
   }
 
   private _onEnemyHitPlayer(enemyHitbox: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile, playerObj: Phaser.Types.Physics.Arcade.GameObjectWithBody | Phaser.Tilemaps.Tile): void {
@@ -876,12 +839,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private _onEnemyDied(_enemy: Enemy, x: number, y: number): void {
-    console.log('[DEBUG] _onEnemyDied - Evento recebido em', x, y);
-    
     if (this._deathParticles) {
       this._deathParticles.setPosition(x, y);
       this._deathParticles.explode(10);
-      console.log('[DEBUG] _onEnemyDied - Partículas de morte emitidas');
     }
 
     // Respawn infinito apenas se ENDLESS_RESPAWN estiver ativo (debug)
@@ -890,35 +850,26 @@ export class GameScene extends Phaser.Scene {
         const randomX = Phaser.Math.Between(200, WORLD_WIDTH - 200);
         const randomY = Phaser.Math.Between(WALK_ZONE_TOP + 10, WALK_ZONE_BOTTOM - 10);
         this._spawnEnemyAt(randomX, randomY);
-        console.log('[DEBUG] _onEnemyDied - Inimigo respawnado em', randomX, randomY);
       });
     }
 
     // Atualiza contador de onda
-    console.log('[DEBUG] _onEnemyDied - currentWaveIndex:', this._currentWaveIndex, 'waveEnemiesRemaining:', this._waveEnemiesRemaining);
-    
     if (this._currentWaveIndex >= 0 && this._waveEnemiesRemaining > 0) {
       this._waveEnemiesRemaining--;
-      console.log('[DEBUG] _onEnemyDied - waveEnemiesRemaining decrementado para:', this._waveEnemiesRemaining);
       this.game.events.emit(EVENTS.WAVE_ENEMIES_LEFT, this._waveEnemiesRemaining);
 
       if (this._waveEnemiesRemaining <= 0) {
-        console.log('[DEBUG] _onEnemyDied - Onda concluída! Chamando _onWaveCleared');
         this._onWaveCleared();
       }
     }
 
     // Reseta combo se não houver mais inimigos vivos
     const aliveEnemies = this._enemies.filter(e => e.isActive && e.fighterState !== FighterState.Dead);
-    console.log('[DEBUG] _onEnemyDied - Inimigos vivos:', aliveEnemies.length);
     
     if (aliveEnemies.length === 0) {
       this._comboCount = 0;
       this.game.events.emit(EVENTS.COMBO_CHANGED, 0);
-      console.log('[DEBUG] _onEnemyDied - Combo resetado');
     }
-    
-    console.log('[DEBUG] ✅ _onEnemyDied - Processamento concluído!');
   }
 
   private _createDeathParticles(): void {
@@ -1061,21 +1012,6 @@ export class GameScene extends Phaser.Scene {
       this._drawDebug();
     } else {
       this._debugGraphics.clear();
-    }
-
-    // Debug de estado do ataque
-    const attack = this._player.getCurrentAttack();
-    const isAttacking = this._player.fighterState === FighterState.Attack;
-    const hitbox = this._player.getHitboxZone();
-    const hitboxBody = hitbox.body as Phaser.Physics.Arcade.Body;
-    
-    if (this.time.now > this.debugTimer) {
-        if (isAttacking && attack) {
-            const isActive = hitboxBody.enable ? 'ATIVA ✅' : 'INATIVA ❌';
-            this.debugText.setText(`👊 ATACANDO | Hitbox: ${isActive}\nPosição: (${Math.round(hitbox.x)}, ${Math.round(hitbox.y)})`);
-        } else {
-            this.debugText.setText('DEBUG: Pronto (Aperte J para testar)');
-        }
     }
   }
 
