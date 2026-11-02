@@ -105,6 +105,11 @@ export class Enemy extends Fighter {
   ) {
     super(scene, x, y, 'enemy_basic', ENEMY_HP_MAX);
 
+    // AJUSTE: Configura o corpo físico para cobrir toda a altura do sprite
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.setSize(20, 32); // Largura e altura do corpo
+    body.setOffset(0, -32); // Offset para cima (origem está nos pés)
+
     this._playerState = playerState;
 
     // ── Barra de vida ────────────────────────────────────
@@ -167,9 +172,11 @@ export class Enemy extends Fighter {
     this.setPosition(x, y);
     this._shadow.setPosition(x, y);
 
-    // Reativa corpo físico
+    // Reativa e reposiciona o corpo físico
     const body = this.body as Phaser.Physics.Arcade.Body;
     body.enable = true;
+    body.setSize(20, 32);
+    body.setOffset(0, -32);
     body.setVelocity(0, 0);
 
     // Reset eixo Z

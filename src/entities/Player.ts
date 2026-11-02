@@ -87,6 +87,11 @@ export class Player extends Fighter {
   ) {
     super(scene, x, y, 'player_idle', playerState.hpMax);
 
+    // Ajuste o corpo físico do jogador também
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.setSize(20, 32);
+    body.setOffset(0, -32);
+
     this._playerState = playerState;
 
     // ── Cria a hitbox de ataque (zone) ───────────────────
