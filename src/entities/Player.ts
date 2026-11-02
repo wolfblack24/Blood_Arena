@@ -64,6 +64,9 @@ export class Player extends Fighter {
   private _lastAttackEndTime: number = 0;
   private _hitTargets: Set<Fighter> = new Set();
   private _attackTimers?: Phaser.Time.TimerEvent[];
+  
+  // ── Debug Visual ───────────────────────────────────────
+  private debugHitboxRect?: Phaser.GameObjects.Rectangle;
 
   // ── Buffer de input ────────────────────────────────────
   private _attackBufferTime: number = 0;
@@ -438,12 +441,42 @@ export class Player extends Fighter {
 
   private _activateHitbox(): void {
     if (!this._currentAttack) return;
+    
+    console.log('👊 [PLAYER] ATIVANDO HITBOX!');
+    
     this._hitboxBody.enable = true;
     this._hitboxBody.setSize(this._currentAttack.hitboxWidth, this._currentAttack.hitboxHeight);
+    
+    // DEBUG VISUAL: Cria retângulo vermelho brilhante
+    const offsetX = this._facingRight ? 15 : -15;
+    const hitboxX = this.groundX + offsetX;
+    const hitboxY = this.groundY - 10;
+    
+    this.debugHitboxRect = this.scene.add.rectangle(
+        hitboxX,
+        hitboxY,
+        this._currentAttack.hitboxWidth,
+        this._currentAttack.hitboxHeight,
+        0xff0000,  // Vermelho brilhante
+        0.8        // Alpha (quase opaco)
+    );
+    this.debugHitboxRect.setDepth(100); // Fica acima de tudo
+    
+    console.log(`📍 [DEBUG] Hitbox ativada em (${hitboxX}, ${hitboxY}) - Tamanho: ${this._currentAttack.hitboxWidth}x${this._currentAttack.hitboxHeight}`);
+    
+    // Atualiza posição da hitbox física
+    this._hitboxZone.setPosition(hitboxX, hitboxY);
   }
 
   private _deactivateHitbox(): void {
     this._hitboxBody.enable = false;
+    
+    // Remove o debug visual
+    if (this.debugHitboxRect) {
+        this.debugHitboxRect.destroy();
+        this.debugHitboxRect = undefined;
+        console.log('❌ [DEBUG] Hitbox desativada');
+    }
   }
 
   /**

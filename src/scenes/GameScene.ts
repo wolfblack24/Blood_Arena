@@ -776,6 +776,8 @@ export class GameScene extends Phaser.Scene {
   // ═══════════════════════════════════════════════════════
 
   private _setupCombatOverlaps(): void {
+    console.log('🔧 [SETUP] Configurando overlaps...');
+    
     this.physics.add.overlap(
       this._player.getHitboxZone(),
       this._enemyGroup,
@@ -783,6 +785,11 @@ export class GameScene extends Phaser.Scene {
       undefined,
       this
     );
+    
+    console.log('✅ [SETUP] Overlap configurado!');
+    
+    // Verifica se o grupo de inimigos tem membros
+    console.log(`👥 [SETUP] Inimigos no grupo: ${this._enemyGroup.getLength()}`);
   }
 
   private _onPlayerHitEnemy(
@@ -1052,10 +1059,13 @@ export class GameScene extends Phaser.Scene {
     // Debug de estado do ataque
     const attack = this._player.getCurrentAttack();
     const isAttacking = this._player.fighterState === FighterState.Attack;
+    const hitbox = this._player.getHitboxZone();
+    const hitboxBody = hitbox.body as Phaser.Physics.Arcade.Body;
     
     if (this.time.now > this.debugTimer) {
         if (isAttacking && attack) {
-            this.debugText.setText(`👊 ATACANDO... Hitbox ativa?`);
+            const isActive = hitboxBody.enable ? 'ATIVA ✅' : 'INATIVA ❌';
+            this.debugText.setText(`👊 ATACANDO | Hitbox: ${isActive}\nPosição: (${Math.round(hitbox.x)}, ${Math.round(hitbox.y)})`);
         } else {
             this.debugText.setText('DEBUG: Pronto (Aperte J para testar)');
         }
