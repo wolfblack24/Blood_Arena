@@ -40,7 +40,7 @@ export const KNOCKBACK_FRICTION = 600; // atrito para desacelerar knockback (px/
 export const KNOCKDOWN_DURATION = 700; // duração do knockdown (ms)
 export const HURT_STUN_DURATION = 250; // duração do stun ao levar dano (ms)
 export const INVULNERABILITY_DURATION = 1200; // i-frames após dano (ms)
-export const LANE_TOLERANCE = 15;      // tolerância de faixa para hit (pixels)
+export const LANE_TOLERANCE = 25;      // tolerância de faixa para hit (pixels) - Aumentado para permitir mais variação de profundidade
 
 // ── Inimigo ────────────────────────────────────────────────
 export const ENEMY_HP_MAX = 40;

@@ -805,7 +805,14 @@ export class GameScene extends Phaser.Scene {
     }
     
     if (!this._player.canHitTarget(enemy)) {
-        this.showDebug('❌ OVERLAP: canHitTarget falhou (distância/invulnerabilidade)');
+        // Feedback visual: mostra que está fora da lane
+        const laneDiff = Math.abs(this._player.groundY - enemy.groundY);
+        const dynamicTolerance = LANE_TOLERANCE + (attack.damage * 0.5);
+        if (laneDiff > dynamicTolerance) {
+            this.showDebug(`⚠️ Fora da lane! Diff: ${laneDiff.toFixed(0)}px (max: ${dynamicTolerance.toFixed(0)}px)`);
+        } else {
+            this.showDebug('❌ OVERLAP: canHitTarget falhou (invulnerabilidade/knockdown)');
+        }
         return;
     }
     

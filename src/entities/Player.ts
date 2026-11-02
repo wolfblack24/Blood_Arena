@@ -531,21 +531,19 @@ export class Player extends Fighter {
     const laneDiff = Math.abs(this.groundY - target.groundY);
     const zDiff = Math.abs(this._jumpHeight - target.jumpHeight);
     
-    // DEBUG: Mostra os valores no console
-    console.log(`[canHitTarget] laneDiff: ${laneDiff.toFixed(1)}, zDiff: ${zDiff.toFixed(1)}`);
-    console.log(`[canHitTarget] LANE_TOLERANCE: ${LANE_TOLERANCE}, zTolerance: ${this._currentAttack.zTolerance}`);
+    // Tolerância dinâmica: ataques mais fortes têm maior alcance vertical
+    const dynamicLaneTolerance = LANE_TOLERANCE + (this._currentAttack.damage * 0.5);
+    // Ex: ataque de 8 dano = 29px, ataque de 14 dano = 32px
     
-    // CORREÇÃO: Aumenta temporariamente a tolerância para debug
-    const debugLaneTolerance = 30; // Aumentado de 15 para 30
-    const debugZTolerance = 30;    // Aumentado para aceitar mais variação
+    console.log(`[canHitTarget] laneDiff: ${laneDiff.toFixed(1)} | tolerance: ${dynamicLaneTolerance.toFixed(1)}`);
     
-    if (laneDiff > debugLaneTolerance) {
-        console.log(`❌ Lane diff muito grande: ${laneDiff} > ${debugLaneTolerance}`);
+    if (laneDiff > dynamicLaneTolerance) {
+        console.log(`❌ Fora da lane: ${laneDiff} > ${dynamicLaneTolerance}`);
         return false;
     }
     
-    if (zDiff > debugZTolerance) {
-        console.log(`❌ Z diff muito grande: ${zDiff} > ${debugZTolerance}`);
+    if (zDiff > this._currentAttack.zTolerance) {
+        console.log(`❌ Fora do eixo Z: ${zDiff} > ${this._currentAttack.zTolerance}`);
         return false;
     }
     
