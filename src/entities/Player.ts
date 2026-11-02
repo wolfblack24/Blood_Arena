@@ -15,7 +15,7 @@
 import Phaser from 'phaser';
 import { Fighter, FighterState } from './Fighter';
 import { PlayerState } from '../state/PlayerState';
-import { AttackData, PLAYER_ATTACKS, PLAYER_AIR_ATTACK } from '../config/attacks';
+import { AttackData, PLAYER_ATTACKS, PLAYER_AIR_ATTACK, RISING_TACKLE } from '../config/attacks';
 import {
   PLAYER_SPEED,
   PLAYER_JUMP_FORCE,
@@ -27,6 +27,10 @@ import {
   INVULNERABILITY_DURATION,
   LANE_TOLERANCE,
   EVENTS,
+  SPECIAL_CHARGE_TIME,
+  SPECIAL_STAMINA_COST,
+  SPECIAL_COOLDOWN,
+  RISING_TACKLE_JUMP_FORCE,
 } from '../config/constants';
 import {
   DASH_DURATION,
@@ -72,6 +76,12 @@ export class Player extends Fighter {
   private _isDashing: boolean = false;
   private _dashEndTime: number = 0;
   private _dashCooldownEnd: number = 0;
+
+  // ── Rising Tackle (Ataque Especial) ────────────────────
+  private _isChargingRisingTackle: boolean = false;
+  private _chargeStartTime: number = 0;
+  private _risingTackleCooldownEnd: number = 0;
+  private _isRisingTackleActive: boolean = false;
 
   // ── Timers de estado ───────────────────────────────────
   private _stateEndTime: number = 0;
@@ -139,6 +149,9 @@ export class Player extends Fighter {
     // Atualiza dash
     this._updateDash();
 
+    // Atualiza Rising Tackle
+    this._updateRisingTackle();
+
     // Aplica atrito no chão durante Hurt/Knockdown
     if (this._fighterState === FighterState.Hurt || this._fighterState === FighterState.Knockdown) {
       this._applyGroundFriction(delta);
@@ -193,6 +206,7 @@ export class Player extends Fighter {
     this._handleMovement();
     this._handleJump();
     this._handleDash();
+    this._handleRisingTackle();
   }
 
   private _handleMovement(): void {
@@ -203,6 +217,9 @@ export class Player extends Fighter {
 
     // Não permite mover durante dash
     if (this._isDashing) return;
+
+    // Não permite mover durante Rising Tackle
+    if (this._isRisingTackleActive) return;
 
     // Lê input
     let vx = 0;
@@ -322,6 +339,114 @@ export class Player extends Fighter {
       this._isDashing = false;
       const body = this.body as Phaser.Physics.Arcade.Body;
       body.setVelocity(0, 0);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // RISING TACKLE (ATAQUE ESPECIAL)
+  // ═══════════════════════════════════════════════════════
+
+  private _handleRisingTackle(): void {
+    // Não pode carregar em estados restritivos
+    if (this._fighterState === FighterState.Hurt ||
+        this._fighterState === FighterState.Knockdown ||
+        this._fighterState === FighterState.Dead ||
+        this._fighterState === FighterState.Attack) {
+      return;
+    }
+
+    // Não pode carregar durante dash ou Rising Tackle ativo
+    if (this._isDashing || this._isRisingTackleActive) return;
+
+    // Verifica cooldown
+    if (this.scene.time.now < this._risingTackleCooldownEnd) return;
+
+    // Detecta início do carregamento
+    if (this._specialKey.isDown && !this._isChargingRisingTackle) {
+      this._isChargingRisingTackle = true;
+      this._chargeStartTime = this.scene.time.now;
+    }
+
+    // Detecta soltura da tecla após carregamento completo
+    if (!this._specialKey.isDown && this._isChargingRisingTackle) {
+      const chargeTime = this.scene.time.now - this._chargeStartTime;
+      this._isChargingRisingTackle = false;
+
+      // Verifica se carregou tempo suficiente
+      if (chargeTime >= SPECIAL_CHARGE_TIME) {
+        // Verifica stamina
+        if (this._playerState.spendStamina(SPECIAL_STAMINA_COST)) {
+          this._startRisingTackle();
+        }
+      }
+    }
+  }
+
+  private _startRisingTackle(): void {
+    this._isRisingTackleActive = true;
+    this._currentAttack = RISING_TACKLE;
+    this._attackStartTime = this.scene.time.now;
+    this._hitTargets.clear();
+
+    // Muda estado para Attack
+    this.changeState(FighterState.Attack);
+
+    // Concede invulnerabilidade durante startup
+    this.grantInvulnerability(RISING_TACKLE.startup);
+
+    // Aplica pulo vertical
+    this.jump(RISING_TACKLE_JUMP_FORCE);
+
+    // Cancela velocidade horizontal
+    const body = this.body as Phaser.Physics.Arcade.Body;
+    body.setVelocityX(0);
+
+    // Agenda ativação da hitbox (após startup)
+    const activateTimer = this.scene.time.delayedCall(RISING_TACKLE.startup, () => {
+      this._activateHitbox();
+    });
+
+    // Agenda desativação da hitbox (após active)
+    const deactivateTimer = this.scene.time.delayedCall(
+      RISING_TACKLE.startup + RISING_TACKLE.active,
+      () => {
+        this._deactivateHitbox();
+      }
+    );
+
+    // Agenda fim do ataque (após recovery)
+    const endTimer = this.scene.time.delayedCall(
+      RISING_TACKLE.startup + RISING_TACKLE.active + RISING_TACKLE.recovery,
+      () => {
+        this._endRisingTackle();
+      }
+    );
+
+    // Armazena timers
+    this._attackTimers = [activateTimer, deactivateTimer, endTimer];
+  }
+
+  private _updateRisingTackle(): void {
+    if (!this._isRisingTackleActive) return;
+
+    // Atualiza posição da hitbox durante o pulo
+    if (this._hitboxBody.enable) {
+      this._updateHitboxPosition();
+    }
+  }
+
+  private _endRisingTackle(): void {
+    this._isRisingTackleActive = false;
+    this._currentAttack = undefined;
+    this._risingTackleCooldownEnd = this.scene.time.now + SPECIAL_COOLDOWN;
+
+    // Volta ao estado idle ou walk
+    if (this._isGrounded) {
+      const body = this.body as Phaser.Physics.Arcade.Body;
+      const isMoving = Math.abs(body.velocity.x) > 10 || Math.abs(body.velocity.y) > 10;
+      this.changeState(isMoving ? FighterState.Walk : FighterState.Idle);
+    } else {
+      this.changeState(FighterState.Jump);
     }
   }
 

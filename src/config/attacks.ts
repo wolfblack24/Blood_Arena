@@ -110,3 +110,21 @@ export const ENEMY_ATTACK: AttackData = {
   hitboxHeight: 14,
   zTolerance: 15,
 };
+
+/**
+ * Rising Tackle (Dragon Punch).
+ * Ataque especial vertical com hitbox ativa durante a subida.
+ * Requer carregamento de 500ms e consome 30 de stamina.
+ */
+export const RISING_TACKLE: AttackData = {
+  startup: 100,      // Tempo antes da hitbox ativar (invulnerável neste período)
+  active: 250,       // Hitbox ativa durante a subida
+  recovery: 300,     // Tempo caindo/aterrissando
+  damage: 20,        // Dano alto
+  hitstop: 4,        // Hitstop forte ao acertar
+  knockback: 0,      // Sem knockback horizontal (é puramente vertical)
+  knockdown: true,   // Sempre derruba o inimigo
+  hitboxWidth: 24,   
+  hitboxHeight: 40,  // Hitbox alta e estreita (vertical)
+  zTolerance: 40,    // Alta tolerância Z para pegar inimigos acima ou em lanes diferentes
+};

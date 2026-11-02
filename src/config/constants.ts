@@ -42,6 +42,12 @@ export const HURT_STUN_DURATION = 250; // duração do stun ao levar dano (ms)
 export const INVULNERABILITY_DURATION = 1200; // i-frames após dano (ms)
 export const LANE_TOLERANCE = 25;      // tolerância de faixa para hit (pixels) - Aumentado para permitir mais variação de profundidade
 
+// ── Rising Tackle (Ataque Especial) ────────────────────────
+export const SPECIAL_CHARGE_TIME = 500;        // ms necessários para carregar
+export const SPECIAL_STAMINA_COST = 30;        // custo de stamina
+export const SPECIAL_COOLDOWN = 800;           // ms de cooldown pós-ataque
+export const RISING_TACKLE_JUMP_FORCE = 280;   // força do pulo vertical
+
 // ── Inimigo ────────────────────────────────────────────────
 export const ENEMY_HP_MAX = 40;
 export const ENEMY_SCORE_VALUE = 100;  // pontos ao derrotar
